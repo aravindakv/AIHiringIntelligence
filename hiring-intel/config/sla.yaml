@@ -1,0 +1,18 @@
+stage_sla_days:
+  applied: 6
+  screen: 6
+  tech_1: 7
+  tech_2: 7
+  onsite: 7
+  offer: 5
+max_days_open:
+  default: 45
+  senior: 60
+max_interviews_per_week: 4
+
+# Human-in-the-loop policy: an insight goes to the review queue if ANY rule fires.
+hitl:
+  confidence_below: 0.6
+  severity_in: [high]
+  eval_flags_any: [hallucination_risk, ungrounded_numbers, invalid_rag_ref]
+  openjev_sensitive_question: "Does this recommendation change compensation, headcount, or an individual person's workload or role?

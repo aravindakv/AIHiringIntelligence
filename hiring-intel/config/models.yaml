@@ -1,0 +1,31 @@
+# Model tiers used by the Routing Agent.
+# Prices are USD per 1M tokens. They are EXAMPLES: copy current prices from your
+# provider's pricing page before you quote USD figures anywhere.
+tiers:
+  small:
+    model: gpt-4o-mini            # or anthropic/claude-haiku-*, ollama/llama3.1
+    input_per_1m: 0.15
+    output_per_1m: 0.60
+    # used only by the offline mock backend to simulate latency
+    sim_base_ms: 350
+    sim_ms_per_out_token: 9
+    sim_ms_per_1k_in_tokens: 40
+  large:
+    model: gpt-4o                 # or anthropic/claude-sonnet-*
+    input_per_1m: 2.50
+    output_per_1m: 10.00
+    sim_base_ms: 700
+    sim_ms_per_out_token: 22
+    sim_ms_per_1k_in_tokens: 90
+
+judge:
+  model: gpt-4o                   # judge >= generator, ideally a different family
+
+# OpenJev handles simple closed-set decisions (no generation, $0 API cost).
+openjev:
+  repo: AlexWortega/openjev
+  subfolder: qwen3.5-0.8b-nli-v5  # 0.8b runs on CPU; use qwen3.5-4b-nli-v5 on a GPU
+  # backend: auto | local | http | fallback
+  #   auto  = HTTP service if OPENJEV_URL is set, else local weights, else keyword fallback
+  backend: auto
+  min_confidence: 0.55            # below this, a decision escalates to the LLM
