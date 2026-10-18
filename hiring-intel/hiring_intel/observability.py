@@ -37,7 +37,7 @@ with _lock:
 
 
 def _now() -> str:
-    return dt.datetime.now(dt.UTC).isoformat(timespec="seconds") # type: ignore
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
 def execute(sql: str, params=()) -> None:
