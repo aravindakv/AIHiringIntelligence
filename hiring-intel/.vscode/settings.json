@@ -1,0 +1,9 @@
+{
+  "sqltools.connections": [
+    {
+      "name": "runs.db",
+      "driver": "SQLite",
+      "database": "/home/akaranam/Documents/Learning/AI/GitHub/AIHiringIntelligence/hiring-intel/data/runs.db"
+    }
+  ]
+}

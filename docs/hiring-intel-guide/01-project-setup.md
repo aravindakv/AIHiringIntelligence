@@ -21,7 +21,6 @@ python3 -m venv .venv && source .venv/bin/activate
 ## Step 1.2 — Dependencies
 
 **File:** `requirements.txt`
-
 ```text
 langgraph>=1.0
 langgraph-checkpoint-sqlite>=2.0
@@ -45,7 +44,6 @@ deepeval>=4.0
 ```
 
 **File:** `requirements-ml.txt`
-
 ```text
 # heavier, optional: real embeddings + OpenJev weights (install where you run them)
 sentence-transformers>=3.0
@@ -63,7 +61,6 @@ pip install -r requirements.txt
 `.env.example` documents every switch the system reads. Copy it to `.env`, which stays out of git.
 
 **File:** `.env.example`
-
 ```bash
 # offline demo: mock | real models: litellm
 LLM_BACKEND=mock
@@ -90,7 +87,6 @@ DEEPEVAL_TELEMETRY_OPT_OUT=YES
 ```
 
 **File:** `.gitignore`
-
 ```text
 .venv/
 __pycache__/
@@ -104,7 +100,6 @@ data/state/
 ```
 
 **File:** `.dockerignore`
-
 ```text
 .venv
 data/raw
@@ -123,7 +118,6 @@ cp .env.example .env
 Two tiers: **small** for agents that mostly read thresholds, **large** for causal reasoning and compensation decisions. The `sim_*` values are used only by the mock backend to simulate latency. The prices are examples: replace them from your provider's pricing page before you quote USD.
 
 **File:** `config/models.yaml`
-
 ```yaml
 # Model tiers used by the Routing Agent.
 # Prices are USD per 1M tokens. They are EXAMPLES: copy current prices from your
@@ -161,7 +155,6 @@ openjev:
 ## Step 1.5 — SLA and human-review policy
 
 **File:** `config/sla.yaml`
-
 ```yaml
 stage_sla_days:
   applied: 6
@@ -188,37 +181,26 @@ hitl:
 Python needs empty `__init__.py` files to treat the folders as packages.
 
 **File:** `hiring_intel/__init__.py`
-
 ```python
-
 ```
 
 **File:** `hiring_intel/agents/__init__.py`
-
 ```python
-
 ```
 
 **File:** `hiring_intel/rag/__init__.py`
-
 ```python
-
 ```
 
 **File:** `hiring_intel/evals/__init__.py`
-
 ```python
-
 ```
 
 **File:** `scripts/__init__.py`
-
 ```python
-
 ```
 
 **File:** `Makefile`
-
 ```makefile
 .PHONY: setup data index golden run eval bench app a2a test docker-up ls-eval ls-offline deepeval deepeval-hub
 setup:      ; python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
@@ -243,7 +225,6 @@ Some targets point at scripts from later chapters; they work once those chapters
 ## Verify
 
 <!-- verify:01 -->
-
 ```bash
 python -c "import langgraph, litellm, chromadb, pydantic, pandas, langsmith, deepeval; print('imports ok')"
 python -c "import yaml; c=yaml.safe_load(open('config/models.yaml')); print({k: v['model'] for k, v in c['tiers'].items()})"
@@ -258,6 +239,6 @@ imports ok
 
 ## Checkpoint
 
-- [x] `pip install -r requirements.txt` finished without errors
-- [x] `.env` exists and says `LLM_BACKEND=mock`
-- [x] the two tiers print
+- [ ] `pip install -r requirements.txt` finished without errors
+- [ ] `.env` exists and says `LLM_BACKEND=mock`
+- [ ] the two tiers print

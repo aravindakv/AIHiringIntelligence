@@ -170,6 +170,12 @@ The graph state holds only JSON-able values: the run config (incl. `data_path`),
 
 Two demo switches prove this: `crash_agent="offers"` (agent raises, run recovers on retry) and `inject_fault="sourcing"` (fabricated numbers, evaluator catches them, retry on large).
 
+## Names and privacy
+
+The generated CSVs carry `candidate_name`, `interviewer_name` and `hiring_manager` so demos are easy to follow (dashboard → **Candidates** tab). IDs remain the only join keys: names repeat (about 1,030 unique names for 1,179 candidates on the small input) and can change.
+
+Names never leave the dashboard. Every feature table becomes prompt text through `metrics.to_text`, which drops `PII_COLUMNS`, and panel features strip interviewer names at the source. `tests/test_privacy.py` captures every prompt in a full run and fails if any candidate, interviewer or hiring-manager name appears. That keeps names out of LLM calls, LangSmith traces and DeepEval/Confident AI uploads, and out of the model's reasoning, where they could bias hiring recommendations.
+
 ## Why these choices
 
 - **LangGraph, not n8n:** parallel fan-out + conditional retry + `interrupt()` for HITL, all testable in pytest.
@@ -406,30 +412,32 @@ Generated from `data/eval/benchmark.csv` (80 runs: 5 scenarios × 3 sizes + one 
 
 | Variant | Lever added | Run cost (USD) | vs previous | E2E latency | Input tokens | Golden pass |
 | --- | --- | --- | --- | --- | --- | --- |
-| all_large | none: everything on the large model, LLM labels notes | 0.1304 | — | 101.2 s | 270,845 | 18/18 |
-| routed | **A. model routing** | 0.0963 | −26% | 101.1 s | 270,773 | — |
-| routed_compressed | **B. context compression** | 0.0874 | −9% | 98.4 s | 262,966 | 15/18 before fix, 18/18 after |
+| all_large | none: everything on the large model, LLM labels notes | 0.1277 | — | 101.7 s | 269,748 | 18/18 |
+| routed | **A. model routing** | 0.0962 | −25% | 101.3 s | 269,676 | — |
+| routed_compressed | **B. context compression** | 0.0874 | −9% | 98.3 s | 262,966 | 15/18 before fix, 18/18 after |
 | optimized | **C. OpenJev for simple decisions** | 0.0162 | −81% | 16.9 s | 6,794 | 18/18 |
 | optimized_cached | **D. response cache (re-run)** | 0.0003 | −98% | 3.4 s | 6,781 | 18/18 |
 
-Overall: **$0.1304 → $0.0162 per run (−88%) and 101 s → 17 s E2E** with no golden-set regression on medium and large inputs.
+Overall: **$0.1277 → $0.0162 per run (−87%) and 102 s → 17 s E2E** with no golden-set regression on medium and large inputs.
+
+**Privacy guard, a side effect on cost.** The datasets now carry candidate, interviewer and hiring-manager names for demos. `metrics.strip_pii` keeps them out of every prompt; before that, the uncompressed panel table sent interviewer names to the LLM. Removing them cut the all-large run on the large input from $0.1304 to $0.1277 with no change in golden results.
 
 ## How cost scales with input size (baseline scenario)
 
 | Input | Candidates | all_large | routed | routed_compressed | optimized |
 | --- | --- | --- | --- | --- | --- |
-| small | 1.2k | $0.0490 | $0.0243 | $0.0195 | $0.0159 |
-| medium | 6.3k | $0.0680 | $0.0421 | $0.0339 | $0.0161 |
-| large | 25k | $0.1304 | $0.0963 | $0.0874 | $0.0162 |
-| xlarge | 84k | $0.3205 | $0.2623 | $0.2518 | $0.0163 |
+| small | 1.2k | $0.0489 | $0.0243 | $0.0195 | $0.0159 |
+| medium | 6.3k | $0.0673 | $0.0420 | $0.0339 | $0.0161 |
+| large | 25k | $0.1277 | $0.0962 | $0.0874 | $0.0162 |
+| xlarge | 84k | $0.3114 | $0.2618 | $0.2518 | $0.0163 |
 
 With an LLM labelling notes, cost grows linearly with the number of notes. With OpenJev the run cost is flat: agents see aggregated features whose size does not depend on candidate count.
 
 ## Per lever
 
-**A. Routing (−26% on large input, −50% on small).** Panel Load, Pipeline Health and Sourcing go to the small model on rule scores; Rejection and Offers go large through an OpenJev tie-break ("does this need causal reasoning?"). Golden score unchanged on medium/large.
+**A. Routing (−25% on large input, −50% on small).** Panel Load, Pipeline Health and Sourcing go to the small model on rule scores; Rejection and Offers go large through an OpenJev tie-break ("does this need causal reasoning?"). Golden score unchanged on medium/large.
 
-**B. Compression (−9% of run cost here; insight-agent input tokens −28% on small and −56% on large inputs: 7,933 → 5,697 and 13,843 → 6,074).** Run cost moves less because, in this variant, note labelling still dominates. Top-N rows, pruned columns, `top_k` 2. The golden set caught a regression: trimming the panel table to the top and bottom 8 interviewers distorted the median, so Panel Load stopped flagging overload (15/18). Fix: compute the panel median before trimming and pass it as a column. After the fix: 18/18. A second issue surfaced when the guide's chapter outputs were compared: keeping only the top 8 rows truncated the overloaded list ("8 over policy" where the full table showed 10). Compressed tables now keep every over-policy row.
+**B. Compression (−9% of run cost here; insight-agent input tokens −28% on small and −52% on large inputs: 7,878 → 5,697 and 12,746 → 6,074).** Run cost moves less because, in this variant, note labelling still dominates. Top-N rows, pruned columns, `top_k` 2. The golden set caught a regression: trimming the panel table to the top and bottom 8 interviewers distorted the median, so Panel Load stopped flagging overload (15/18). Fix: compute the panel median before trimming and pass it as a column. After the fix: 18/18. A second issue surfaced when the guide's chapter outputs were compared: keeping only the top 8 rows truncated the overloaded list ("8 over policy" where the full table showed 10). Compressed tables now keep every over-policy row.
 
 **C. OpenJev (−81%).** Labelling 14.7k free-text notes moved from 295 batched small-LLM calls to local NLI decisions. It also removed ~81 s of simulated E2E latency. In this build OpenJev ran as the keyword fallback (no Hugging Face access); label accuracy vs planted truth was 0.92 with the 3 deliberately ambiguous note templates (about 8% of notes) left `unclassified` instead of guessed. Measure the real model's accuracy and CPU time before you quote this lever.
 

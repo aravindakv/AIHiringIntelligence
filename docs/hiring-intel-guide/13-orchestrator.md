@@ -326,7 +326,7 @@ EOF
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-run optimized-1018065915-c0fd done; errors: []
+run optimized-1019050429-35b6 done; errors: []
   offers      [high  ] Offers below 90% of expected CTC are being declined
   panel_load  [high  ] 10 interviewers over load policy
   pipeline    [medium] SRE onsite breaches SLA
@@ -338,7 +338,7 @@ run optimized-1018065915-c0fd done; errors: []
 retried: ['offers', 'sourcing'] | errors: ['offers: RuntimeError: injected crash']
 scores after retry: {'offers': 0.97, 'panel_load': 0.97, 'pipeline': 0.97, 'rejection': 0.97, 'sourcing': 0.97}
 optimizer: ['Trial the small model for rejection', 'Compress rejection context', 'Trial the small model for sourcing']
-E2E by stage (ms): {'ingest': 56, 'enrich': 75, 'evaluate': 192, 'human_review': 24, 'optimize': 3765, 'agents': 14926, 'retry': 13647}
+E2E by stage (ms): {'ingest': 68, 'enrich': 75, 'evaluate': 238, 'human_review': 28, 'optimize': 3767, 'agents': 14945, 'retry': 13664}
 ```
 
 Interactive review in the terminal:

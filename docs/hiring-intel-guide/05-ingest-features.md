@@ -11,6 +11,7 @@
   - keeps prompts the same size whatever the input size, which is why run cost stays flat on 84k candidates (chapter 15).
 - **Validate at the edge.** Ingest checks required columns, parses dates, drops duplicates and orphan events, and counts what it quarantined. A missing table is a hard failure with a clear message; bad rows are not.
 - **Cache per path.** The graph state carries only the dataset path; the loaded tables live in a per-path cache. That keeps LangGraph checkpoints small, which human review needs (chapter 11).
+- **Names stay out of prompts.** The CSVs carry names for demos, but agents reason over aggregates and IDs only. `to_text()` is the single path from a feature table to prompt text, and it drops every column in `PII_COLUMNS`; panel features also strip interviewer names at the source. So names never reach an LLM, a LangSmith trace or a DeepEval upload, and can't bias a hiring recommendation. Chapter 19 has the test that proves it. A side effect: the uncompressed runs got slightly cheaper (chapter 15).
 - **`compress=True`** is optimization lever B: fewer rows and columns per table. Evaluation caught two bugs it caused (chapter 15), which is why the panel median is computed **before** trimming and every over-policy interviewer is kept.
 
 | Feature function | Agent | Key columns |
@@ -134,6 +135,14 @@ from hiring_intel.ingest import HiringData
 
 STAGES = ["applied", "screen", "tech_1", "tech_2", "onsite", "offer"]
 
+# Names exist in the CSVs for demos (dashboard candidate lookup). They must never reach an LLM prompt,
+# a LangSmith trace or a DeepEval upload: agents reason over aggregates and IDs only.
+PII_COLUMNS = {"name", "candidate_name", "interviewer_name", "hiring_manager", "email", "phone"}
+
+
+def strip_pii(df: pd.DataFrame) -> pd.DataFrame:
+    return df.drop(columns=[c for c in df.columns if c in PII_COLUMNS])
+
 
 def _min_n(d: HiringData) -> int:
     return max(15, len(d.candidates) // 400)
@@ -178,7 +187,7 @@ def panel_load_features(d: HiringData, weeks: int = 8, compress: bool = False, c
     end = i.scheduled_at.quantile(0.9)
     i = i[(i.scheduled_at <= end) & (i.scheduled_at > end - pd.Timedelta(weeks=weeks))]
     load = i.groupby("interviewer_id").size().rename("interviews").reset_index()
-    load = d.interviewers.merge(load, how="left", on="interviewer_id").fillna({"interviews": 0})
+    load = strip_pii(d.interviewers).merge(load, how="left", on="interviewer_id").fillna({"interviews": 0})
     load["interviews"] = load.interviews.astype(int)
     load["per_week"] = (load.interviews / weeks).round(1)
     load["share"] = (load.interviews / max(1, load.interviews.sum())).round(3)
@@ -248,9 +257,11 @@ def pipeline_features(d: HiringData, sla: dict, compress: bool = False) -> dict:
 
 
 def to_text(feats) -> str:
+    """The only way feature tables become prompt text: PII columns are dropped here as a last guard."""
     if isinstance(feats, pd.DataFrame):
-        return feats.to_csv(index=False)
-    return "\n".join(f"## {k}\n{v.to_csv(index=False) if hasattr(v, 'to_csv') else v}" for k, v in feats.items())
+        return strip_pii(feats).to_csv(index=False)
+    return "\n".join(f"## {k}\n{strip_pii(v).to_csv(index=False) if hasattr(v, 'to_csv') else v}"
+                     for k, v in feats.items())
 ```
 
 ## Verify

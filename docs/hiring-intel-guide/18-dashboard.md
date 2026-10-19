@@ -11,6 +11,7 @@
 | Overview | run cost, E2E latency, mean eval, items awaiting review, agents OK; funnel; top 4 actions with review status |
 | Insights | one card per insight: recommendation, confidence, evidence table, rebalance plan, alternative, cost |
 | Human review | pending items with the reasons they were held; approve / edit / reject |
+| Candidates | search by name or ID, filter by role, outcome and source; open one candidate's journey, interviews (with interviewer names) and offer. Flags when a name is shared, so you pick by ID |
 | Evaluation | per-agent scores and flags; golden results |
 | Cost & latency | USD per agent and tier, critical path by stage, routing and OpenJev decisions |
 | Compare inputs | cost and E2E latency by input size and variant, per scenario |
@@ -92,7 +93,8 @@ st.title("Hiring Intelligence")
 st.caption(f"Run `{run_id}` · input `{meta.data_path}` · variant `{meta.variant}` · "
            f"{int(meta.n_candidates):,} candidates")
 
-tabs = st.tabs(["Overview", "Insights", "Human review", "Evaluation", "Cost & latency", "Compare inputs", "Run log"])
+tabs = st.tabs(["Overview", "Insights", "Human review", "Candidates", "Evaluation", "Cost & latency",
+                "Compare inputs", "Run log"])
 
 # ------------------------------------------------------------------ overview
 with tabs[0]:
@@ -161,8 +163,70 @@ with tabs[2]:
     done = reviews[reviews.status != "pending"][["agent", "status", "reviewer", "note", "reasons"]]
     st.dataframe(done, hide_index=True)
 
-# ------------------------------------------------------------------ evaluation
+# ------------------------------------------------------------------ candidates (demo lookup)
 with tabs[3]:
+    st.write("Look up a candidate by name or ID to follow their journey. Names are for people using this "
+             "dashboard only: agents, prompts, LangSmith traces and DeepEval uploads never see them.")
+    from hiring_intel.ingest import load_all as _load
+    dd = _load(meta.data_path)
+
+    def _dates(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        for c in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[c]):
+                df[c] = df[c].dt.strftime("%Y-%m-%d")
+        return df
+    cand = dd.candidates.merge(dd.requisitions[["req_id", "role", "level", "hiring_manager"]]
+                               if "hiring_manager" in dd.requisitions else dd.requisitions[["req_id", "role", "level"]],
+                               on="req_id")
+    if "candidate_name" not in cand:
+        st.info("This dataset has no candidate names. Regenerate it with scripts/generate_mock_data.py.")
+    else:
+        q = st.text_input("Search name or ID", key="cand-q", placeholder="e.g. Isha Joshi or C0000001")
+        c1, c2, c3 = st.columns(3)
+        f_role = c1.multiselect("Role", sorted(cand.role.unique()), key="cand-role")
+        f_out = c2.multiselect("Outcome", sorted(cand.outcome.unique()), key="cand-out")
+        f_src = c3.multiselect("Source", sorted(cand.source.unique()), key="cand-src")
+        view = cand
+        if q:
+            view = view[view.candidate_name.str.contains(q, case=False, regex=False)
+                        | view.candidate_id.str.contains(q, case=False, regex=False)]
+        for col, vals in (("role", f_role), ("outcome", f_out), ("source", f_src)):
+            if vals:
+                view = view[view[col].isin(vals)]
+        dup = view.candidate_name.duplicated(keep=False).sum()
+        st.caption(f"{len(view):,} candidates" + (f" · {dup} share a name with someone else in this list, "
+                                                   "so pick by ID" if dup else ""))
+        cols = ["candidate_id", "candidate_name", "role", "level", "source", "current_stage", "outcome"]
+        st.dataframe(view[cols + (["hiring_manager"] if "hiring_manager" in view else [])].head(500),
+                     hide_index=True)
+        if len(view):
+            pick = st.selectbox("Open candidate", view.candidate_id.head(500),
+                                format_func=lambda c: f"{c} · {view.set_index('candidate_id').candidate_name[c]}",
+                                key="cand-pick")
+            row = cand.set_index("candidate_id").loc[pick]
+            st.subheader(f"{row.candidate_name} ({pick})")
+            st.write(f"{row.role}, {row.level} · source {row.source} · outcome **{row.outcome}**"
+                     + (f" · hiring manager {row.hiring_manager}" if "hiring_manager" in row else ""))
+            ev = dd.stage_events[dd.stage_events.candidate_id == pick]
+            st.markdown("**Journey**")
+            st.dataframe(_dates(ev[[c for c in ["stage", "entered_at", "exited_at", "result", "rejection_reason",
+                                                "reason", "rejection_note"] if c in ev]]), hide_index=True)
+            iv = dd.interviews[dd.interviews.candidate_id == pick]
+            if len(iv):
+                st.markdown("**Interviews**")
+                st.dataframe(_dates(iv[[c for c in ["stage", "interviewer_id", "interviewer_name", "scheduled_at",
+                                                    "score"] if c in iv]]), hide_index=True)
+            of = dd.offers[dd.offers.candidate_id == pick]
+            if len(of):
+                st.markdown("**Offer**")
+                o = of.iloc[0]
+                st.write(f"Offered {o.offered_ctc:,.0f} vs expected {o.expected_ctc:,.0f} "
+                         f"({o.offered_ctc / o.expected_ctc:.0%}) · **{o.status}**"
+                         + (f" · {o.decline_note}" if isinstance(o.get("decline_note"), str) else ""))
+
+# ------------------------------------------------------------------ evaluation
+with tabs[4]:
     if evals:
         ev = pd.DataFrame([{"agent": a, "overall": e["overall"], "grounded": e["numbers_grounded"],
                             "refs_valid": e["refs_valid"], "flags": ", ".join(e["flags"]),
@@ -176,7 +240,7 @@ with tabs[3]:
         st.dataframe(g, hide_index=True)
 
 # ------------------------------------------------------------------ cost & latency
-with tabs[4]:
+with tabs[5]:
     from hiring_intel.report import e2e_latency_ms
     lat = e2e_latency_ms(run_id)
     calls["agent"] = calls.agent.str.split(":").str[0]
@@ -198,7 +262,7 @@ with tabs[4]:
                      hide_index=True)
 
 # ------------------------------------------------------------------ compare inputs
-with tabs[5]:
+with tabs[6]:
     r = runs[~runs.variant.str.startswith("golden")].copy()
     order = {"small": 0, "medium": 1, "large": 2, "xlarge": 3}
     r = r[r["size"].isin(order)].assign(o=lambda x: x["size"].map(order)).sort_values("o")
@@ -213,7 +277,7 @@ with tabs[5]:
         st.dataframe(rr[["size", "variant", "n_candidates", "total_usd", "llm_calls", "input_tokens",
                          "e2e_latency_ms", "mean_eval", "hitl_pending"]], hide_index=True)
 
-with tabs[6]:
+with tabs[7]:
     st.dataframe(calls, hide_index=True)
 ```
 
@@ -234,10 +298,12 @@ dashboard HTTP 200
 ok
 ```
 
-Open http://localhost:8501, pick `comp_crunch_medium`, press **Run now**, then work through the **Human review** tab.
+Open http://localhost:8501, pick `comp_crunch_medium`, press **Run now**, then work through the **Human review** tab. For a demo, open **Candidates**, search a surname such as `Joshi`, and follow one candidate from application to offer.
+
+Names appear only here, in the dashboard. Put it behind a login before sharing it (chapter 20).
 
 ## Checkpoint
 
-- [ ] all seven tabs render
+- [ ] all eight tabs render
 - [ ] approving an item moves it out of the pending list
 - [ ] **Compare inputs** shows cost rising with size for `all_large` and flat for `optimized`

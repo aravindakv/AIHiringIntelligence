@@ -20,6 +20,8 @@
 - **Sizes:** small (~1.3k candidates), medium (~6k), large (~25k), xlarge (~84k, baseline only).
 - **Free-text notes.** Real ATS exports often lack a structured rejection reason, so 60% of rejections only have an interviewer note, and 8% of notes are ambiguous on purpose. Chapter 07 labels them with OpenJev. The true reason is saved separately in `_labels.csv` so you can measure labelling accuracy.
 - **Six tables:** `requisitions`, `candidates`, `stage_events`, `interviews`, `interviewers`, `offers`.
+- **Names for demos.** `candidate_name` appears on candidates, stage events, interviews and offers; `interviewer_name` on interviews; `hiring_manager` on requisitions. `add_names()` draws them from a separate random stream, so adding names changes no planted pattern and no benchmark number.
+- **IDs are still the keys.** `C0000010` means requisition `R0000`, candidate #10. Names repeat (about 1,030 unique names for 1,179 candidates on the small input) and can change, so every join uses IDs. Names are display labels only; chapter 05 makes sure they never reach a model.
 
 ## Step 2.1 — The generator
 
@@ -35,6 +37,7 @@ Usage:
 
 Sizes (approx.):  small ~1.3k candidates | medium ~6k | large ~25k | xlarge ~85k
 Each scenario plants different patterns, so the same agents get different inputs.
+Tables carry display names (candidate_name, interviewer_name, hiring_manager) for demos; IDs stay the keys.
 The planted truth is written to <out>/_truth.json and is used by the golden-set eval.
 """
 from __future__ import annotations
@@ -60,6 +63,20 @@ FIRST = ["Asha", "Ravi", "Meera", "Arjun", "Divya", "Kiran", "Neha", "Vikram", "
          "Sneha", "Aditya", "Kavya", "Rohan", "Isha", "Nikhil", "Pooja", "Sanjay", "Tara", "Varun",
          "Lena", "Omar", "Mia", "Jon", "Sara", "Ken", "Ana", "Leo", "Zoe", "Ivan"]
 LAST = ["Rao", "Iyer", "Shah", "Menon", "Nair", "Gupta", "Reddy", "Das", "Bose", "Kulkarni"]
+
+# Synthetic candidate names for demos. Drawn from their OWN random stream (see add_names), so adding
+# names never changes any planted pattern. Duplicates happen on large inputs, as in real life:
+# that is why every table joins on candidate_id, never on a name.
+CAND_FIRST = FIRST + ["Ananya", "Karthik", "Lakshmi", "Manoj", "Nandini", "Pranav", "Riya", "Siddharth",
+                      "Shreya", "Tanvi", "Vivek", "Yash", "Zara", "Farhan", "Gauri", "Harsh", "Ishaan",
+                      "Juhi", "Kabir", "Lavanya", "Madhav", "Nisha", "Om", "Pallavi", "Rakesh", "Sanya",
+                      "Tejas", "Uma", "Vani", "Wasim", "Aisha", "Ben", "Chloe", "David", "Elena", "Felix",
+                      "Grace", "Hugo", "Irene", "Jack", "Kenji", "Lucia", "Mateo", "Nora", "Oscar", "Paula"]
+CAND_LAST = LAST + ["Agarwal", "Banerjee", "Chopra", "Deshpande", "Fernandes", "Ghosh", "Hegde", "Joshi",
+                    "Kapoor", "Kumar", "Malhotra", "Mishra", "Naidu", "Patel", "Pillai", "Prasad", "Saxena",
+                    "Sen", "Sharma", "Singh", "Srinivasan", "Thomas", "Varma", "Verma", "Yadav", "Khan",
+                    "D'Souza", "Mehta", "Bhat", "Kamath", "Ali", "Smith", "Garcia", "Muller", "Rossi",
+                    "Tanaka", "Silva", "Novak", "Larsen", "Brown"]
 
 # Free-text notes an interviewer would type. The structured reason is often missing in
 # real ATS exports, so the system must classify these (an OpenJev job).
@@ -259,13 +276,41 @@ def generate(scenario: str = "baseline", size: str = "small", seed: int = 42, ou
         q["status"] = "open" if aging else "filled" if hired else "open" if age <= 40 else "closed"
     tables = {"requisitions": reqs, "candidates": cands, "stage_events": events,
               "interviews": interviews, "offers": offers}
-    for name, rows in tables.items():
-        pd.DataFrame(rows).to_csv(out_dir / f"{name}.csv", index=False)
+    frames = add_names({k: pd.DataFrame(v) for k, v in tables.items()}, interviewers, seed)
+    for name, df in frames.items():
+        df.to_csv(out_dir / f"{name}.csv", index=False)
     interviewers.to_csv(out_dir / "interviewers.csv", index=False)
     pd.DataFrame(labels).to_csv(out_dir / "_labels.csv", index=False)   # hidden truth, eval only
     truth = {"scenario": asdict(sc), "size": size, "counts": {k: len(v) for k, v in tables.items()}}
     (out_dir / "_truth.json").write_text(json.dumps(truth, indent=2, default=str))
     return out_dir
+
+
+def add_names(frames: dict, interviewers: pd.DataFrame, seed: int) -> dict:
+    """Add display names for demos: candidate_name on every candidate-level table, interviewer_name
+    on interviews, hiring_manager on requisitions. IDs stay the keys; names are labels only and are
+    stripped before anything reaches an LLM (hiring_intel/metrics.py: PII_COLUMNS)."""
+    name_rng = random.Random(seed + 1009)          # separate stream: patterns stay identical
+    cands = frames["candidates"]
+    names = {cid: f"{name_rng.choice(CAND_FIRST)} {name_rng.choice(CAND_LAST)}" for cid in cands.candidate_id}
+    managers = {rid: f"{name_rng.choice(CAND_FIRST)} {name_rng.choice(CAND_LAST)}"
+                for rid in frames["requisitions"].req_id}
+    iv_names = dict(zip(interviewers.interviewer_id, interviewers.name))
+
+    def after(df: pd.DataFrame, anchor: str, col: str, values) -> pd.DataFrame:
+        df = df.copy()
+        df.insert(df.columns.get_loc(anchor) + 1, col, values)
+        return df
+
+    for t in ("candidates", "stage_events", "interviews", "offers"):
+        if len(frames[t]):
+            frames[t] = after(frames[t], "candidate_id", "candidate_name", frames[t].candidate_id.map(names))
+    if len(frames["interviews"]):
+        frames["interviews"] = after(frames["interviews"], "interviewer_id", "interviewer_name",
+                                     frames["interviews"].interviewer_id.map(iv_names))
+    frames["requisitions"] = after(frames["requisitions"], "team", "hiring_manager",
+                                   frames["requisitions"].req_id.map(managers))
+    return frames
 
 
 if __name__ == "__main__":
@@ -302,6 +347,8 @@ This writes 16 folders under `data/raw/` (5 scenarios × small/medium/large, plu
 python scripts/generate_mock_data.py --all | tail -3
 ls data/raw | wc -l
 head -3 data/raw/baseline_small/stage_events.csv
+head -3 data/raw/baseline_small/interviews.csv
+python -c "import pandas as pd; c=pd.read_csv('data/raw/baseline_small/candidates.csv'); print(c.candidate_name.nunique(), 'unique names for', len(c), 'candidates')"
 ```
 
 Expected output (captured on a fresh extract, mock backend):
@@ -311,9 +358,13 @@ data/raw/sourcing_shift_medium {'requisitions': 150, 'candidates': 6654, 'stage_
 data/raw/sourcing_shift_large {'requisitions': 600, 'candidates': 25681, 'stage_events': 56336, 'interviews': 29275, 'offers': 859}
 data/raw/baseline_xlarge {'requisitions': 2000, 'candidates': 84270, 'stage_events': 194452, 'interviews': 103687, 'offers': 4201}
 16
-candidate_id,stage,entered_at,exited_at,result,rejection_reason,rejection_note
-C0000000,applied,2026-04-23,2026-04-29,reject,experience gap,Too junior for the level; limited ownership of production systems.
-C0000001,applied,2026-05-06,2026-05-08,pass,,
+candidate_id,candidate_name,stage,entered_at,exited_at,result,rejection_reason,rejection_note
+C0000000,Neha Muller,applied,2026-04-23,2026-04-29,reject,experience gap,Too junior for the level; limited ownership of production systems.
+C0000001,Isha Joshi,applied,2026-05-06,2026-05-08,pass,,
+interview_id,candidate_id,candidate_name,interviewer_id,interviewer_name,stage,scheduled_at,score
+C0000001-screen,C0000001,Isha Joshi,I0008,Mia Bose,screen,2026-05-13,3
+C0000004-screen,C0000004,Tejas Rao,I0014,Meera Reddy,screen,2026-05-08,2
+1029 unique names for 1179 candidates
 ```
 
 ## Checkpoint
@@ -321,3 +372,4 @@ C0000001,applied,2026-05-06,2026-05-08,pass,,
 - [ ] 16 dataset folders exist
 - [ ] `baseline_xlarge` has about 84k candidates
 - [ ] rejection rows have a `rejection_note`, and most have an empty `rejection_reason`
+- [ ] `candidates.csv`, `interviews.csv` and `offers.csv` show `candidate_name` next to `candidate_id`

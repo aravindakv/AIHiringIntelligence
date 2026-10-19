@@ -6,6 +6,7 @@ Usage:
 
 Sizes (approx.):  small ~1.3k candidates | medium ~6k | large ~25k | xlarge ~85k
 Each scenario plants different patterns, so the same agents get different inputs.
+Tables carry display names (candidate_name, interviewer_name, hiring_manager) for demos; IDs stay the keys.
 The planted truth is written to <out>/_truth.json and is used by the golden-set eval.
 """
 from __future__ import annotations
@@ -31,6 +32,20 @@ FIRST = ["Asha", "Ravi", "Meera", "Arjun", "Divya", "Kiran", "Neha", "Vikram", "
          "Sneha", "Aditya", "Kavya", "Rohan", "Isha", "Nikhil", "Pooja", "Sanjay", "Tara", "Varun",
          "Lena", "Omar", "Mia", "Jon", "Sara", "Ken", "Ana", "Leo", "Zoe", "Ivan"]
 LAST = ["Rao", "Iyer", "Shah", "Menon", "Nair", "Gupta", "Reddy", "Das", "Bose", "Kulkarni"]
+
+# Synthetic candidate names for demos. Drawn from their OWN random stream (see add_names), so adding
+# names never changes any planted pattern. Duplicates happen on large inputs, as in real life:
+# that is why every table joins on candidate_id, never on a name.
+CAND_FIRST = FIRST + ["Ananya", "Karthik", "Lakshmi", "Manoj", "Nandini", "Pranav", "Riya", "Siddharth",
+                      "Shreya", "Tanvi", "Vivek", "Yash", "Zara", "Farhan", "Gauri", "Harsh", "Ishaan",
+                      "Juhi", "Kabir", "Lavanya", "Madhav", "Nisha", "Om", "Pallavi", "Rakesh", "Sanya",
+                      "Tejas", "Uma", "Vani", "Wasim", "Aisha", "Ben", "Chloe", "David", "Elena", "Felix",
+                      "Grace", "Hugo", "Irene", "Jack", "Kenji", "Lucia", "Mateo", "Nora", "Oscar", "Paula"]
+CAND_LAST = LAST + ["Agarwal", "Banerjee", "Chopra", "Deshpande", "Fernandes", "Ghosh", "Hegde", "Joshi",
+                    "Kapoor", "Kumar", "Malhotra", "Mishra", "Naidu", "Patel", "Pillai", "Prasad", "Saxena",
+                    "Sen", "Sharma", "Singh", "Srinivasan", "Thomas", "Varma", "Verma", "Yadav", "Khan",
+                    "D'Souza", "Mehta", "Bhat", "Kamath", "Ali", "Smith", "Garcia", "Muller", "Rossi",
+                    "Tanaka", "Silva", "Novak", "Larsen", "Brown"]
 
 # Free-text notes an interviewer would type. The structured reason is often missing in
 # real ATS exports, so the system must classify these (an OpenJev job).
@@ -230,13 +245,41 @@ def generate(scenario: str = "baseline", size: str = "small", seed: int = 42, ou
         q["status"] = "open" if aging else "filled" if hired else "open" if age <= 40 else "closed"
     tables = {"requisitions": reqs, "candidates": cands, "stage_events": events,
               "interviews": interviews, "offers": offers}
-    for name, rows in tables.items():
-        pd.DataFrame(rows).to_csv(out_dir / f"{name}.csv", index=False)
+    frames = add_names({k: pd.DataFrame(v) for k, v in tables.items()}, interviewers, seed)
+    for name, df in frames.items():
+        df.to_csv(out_dir / f"{name}.csv", index=False)
     interviewers.to_csv(out_dir / "interviewers.csv", index=False)
     pd.DataFrame(labels).to_csv(out_dir / "_labels.csv", index=False)   # hidden truth, eval only
     truth = {"scenario": asdict(sc), "size": size, "counts": {k: len(v) for k, v in tables.items()}}
     (out_dir / "_truth.json").write_text(json.dumps(truth, indent=2, default=str))
     return out_dir
+
+
+def add_names(frames: dict, interviewers: pd.DataFrame, seed: int) -> dict:
+    """Add display names for demos: candidate_name on every candidate-level table, interviewer_name
+    on interviews, hiring_manager on requisitions. IDs stay the keys; names are labels only and are
+    stripped before anything reaches an LLM (hiring_intel/metrics.py: PII_COLUMNS)."""
+    name_rng = random.Random(seed + 1009)          # separate stream: patterns stay identical
+    cands = frames["candidates"]
+    names = {cid: f"{name_rng.choice(CAND_FIRST)} {name_rng.choice(CAND_LAST)}" for cid in cands.candidate_id}
+    managers = {rid: f"{name_rng.choice(CAND_FIRST)} {name_rng.choice(CAND_LAST)}"
+                for rid in frames["requisitions"].req_id}
+    iv_names = dict(zip(interviewers.interviewer_id, interviewers.name))
+
+    def after(df: pd.DataFrame, anchor: str, col: str, values) -> pd.DataFrame:
+        df = df.copy()
+        df.insert(df.columns.get_loc(anchor) + 1, col, values)
+        return df
+
+    for t in ("candidates", "stage_events", "interviews", "offers"):
+        if len(frames[t]):
+            frames[t] = after(frames[t], "candidate_id", "candidate_name", frames[t].candidate_id.map(names))
+    if len(frames["interviews"]):
+        frames["interviews"] = after(frames["interviews"], "interviewer_id", "interviewer_name",
+                                     frames["interviews"].interviewer_id.map(iv_names))
+    frames["requisitions"] = after(frames["requisitions"], "team", "hiring_manager",
+                                   frames["requisitions"].req_id.map(managers))
+    return frames
 
 
 if __name__ == "__main__":

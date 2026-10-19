@@ -382,8 +382,8 @@ EOF
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-openjev: {'classified': 14724, 'unique_notes': 25, 'backend': 'keyword-fallback', 'compute_ms': 143, 'llm_equivalent_usd': 0.3534, 'accuracy_vs_truth': 0.92}
-llm    : {'classified': 3660, 'unique_notes': 25, 'backend': 'llm-small', 'compute_ms': 237, 'llm_equivalent_usd': 0.0878, 'accuracy_vs_truth': 0.927}
+openjev: {'classified': 14724, 'unique_notes': 25, 'backend': 'keyword-fallback', 'compute_ms': 117, 'llm_equivalent_usd': 0.3534, 'accuracy_vs_truth': 0.92}
+llm    : {'classified': 3660, 'unique_notes': 25, 'backend': 'llm-small', 'compute_ms': 326, 'llm_equivalent_usd': 0.0878, 'accuracy_vs_truth': 0.927}
 ```
 
 The `llm` mode pays per note; OpenJev labels the same notes at $0 API cost. `llm_equivalent_usd` is what the OpenJev job would have cost on the small LLM. The keyword fallback leaves the ambiguous notes `unclassified` instead of guessing, which is where most of the 8% accuracy gap comes from.

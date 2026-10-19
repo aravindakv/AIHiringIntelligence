@@ -12,7 +12,8 @@
   - OpenJev escalates when unsure;
   - a crashed agent and a faked agent both recover;
   - interrupt/resume works;
-  - A2A returns the contract.
+  - A2A returns the contract;
+  - no name from the dataset appears in any prompt.
 - **CI tiers:**
   - every push: unit tests + golden set offline (must stay 18/18 on medium) + DeepEval offline;
   - nightly or on demand: LangSmith experiment and DeepEval with an LLM judge, uploading to Confident AI. Keys come from repository secrets: `OPENAI_API_KEY`, `LANGSMITH_API_KEY`, `CONFIDENT_API_KEY`.
@@ -134,6 +135,45 @@ def test_agent_card_and_message_send():
     assert out.agent == "offers" and out.insights
 ```
 
+The privacy test captures every prompt built during a full run (uncompressed features and LLM note labelling, the variant that sends the most text) and fails if any candidate, interviewer or hiring-manager name appears. Disable `strip_pii` and it fails; that is how you know it tests something.
+
+**File:** `tests/test_privacy.py`
+```python
+"""Names are in the CSVs for demos; they must never appear in any prompt sent to a model."""
+import pandas as pd
+
+from hiring_intel import llm
+
+
+def test_no_names_in_any_prompt(monkeypatch):
+    prompts = []
+    real = llm.call_structured
+
+    def spy(**kw):
+        prompts.append(kw["system"] + "\n" + kw["user"])
+        return real(**kw)
+
+    import hiring_intel.agents.base as base
+    import hiring_intel.agents.optimizer as opt
+    import hiring_intel.agents.router as router
+    import hiring_intel.enrich as enrich
+    for mod in (base, opt, router, enrich):
+        monkeypatch.setattr(mod, "call_structured", spy)
+
+    from hiring_intel.graph import run
+    # all_large-style run: uncompressed features and LLM note labelling send the most text
+    run("data/raw/baseline_small", variant="privacy", compress=False, classify="llm", force_tier="large")
+    assert prompts, "no prompts captured"
+
+    raw = "data/raw/baseline_small/"
+    names = set(pd.read_csv(raw + "candidates.csv").candidate_name)
+    names |= set(pd.read_csv(raw + "interviewers.csv").name)
+    names |= set(pd.read_csv(raw + "requisitions.csv").hiring_manager)
+    text = "\n".join(prompts)
+    leaked = sorted(n for n in names if n in text)
+    assert not leaked, f"names leaked into prompts: {leaked[:5]}"
+```
+
 ## Step 19.2 — GitHub Actions
 
 **File:** `.github/workflows/eval.yml`
@@ -205,11 +245,11 @@ python -c "import yaml; w=yaml.safe_load(open('.github/workflows/eval.yml')); pr
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-11 passed in 4.26s
+12 passed in 5.15s
 jobs: ['offline', 'real-models']
 ```
 
 ## Checkpoint
 
-- [ ] 11 unit tests pass
+- [ ] 12 unit tests pass
 - [ ] after a push, the `offline` job is green; add the three secrets for the nightly job
