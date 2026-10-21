@@ -104,7 +104,7 @@ The committed benchmark ran with `LLM_BACKEND=mock`, `EMBEDDINGS=hashing` and th
 
 ## One-line summary
 
-Pandas computes the numbers, OpenJev makes closed-set decisions, the LLM interprets and recommends, a second agent checks the first, and a human signs off anything that changes pay, headcount or someone's workload.
+Pandas computes the numbers, rule-based detectors decide what counts as a finding, OpenJev makes closed-set decisions, the LLM interprets and recommends, a second agent checks the first, and a human signs off anything that changes pay, headcount or someone's workload.
 
 ## Graph
 
@@ -412,26 +412,28 @@ Generated from `data/eval/benchmark.csv` (80 runs: 5 scenarios × 3 sizes + one 
 
 | Variant | Lever added | Run cost (USD) | vs previous | E2E latency | Input tokens | Golden pass |
 | --- | --- | --- | --- | --- | --- | --- |
-| all_large | none: everything on the large model, LLM labels notes | 0.1682 | — | 175.5 s | 292,241 | 18/18 |
-| routed | **A. model routing** | 0.1367 | −19% | 173.6 s | 292,170 | — |
-| routed_compressed | **B. context compression** | 0.1279 | −6% | 173.1 s | 285,460 | 15/18 before fix, 18/18 after |
-| optimized | **C. OpenJev for simple decisions** | 0.0162 | −87% | 17.1 s | 6,794 | 18/18 |
-| optimized_cached | **D. response cache (re-run)** | 0.0003 | −98% | 3.8 s | 6,781 | 18/18 |
+| all_large | none: everything on the large model, LLM labels notes | 0.1705 | — | 174.2 s | 293,172 | 18/18 |
+| routed | **A. model routing** | 0.1377 | −19% | 171.3 s | 293,101 | — |
+| routed_compressed | **B. context compression** | 0.1289 | −6% | 171.0 s | 286,372 | 15/18 before fix, 18/18 after |
+| optimized | **C. OpenJev for simple decisions** | 0.0172 | −87% | 19.0 s | 7,707 | 18/18 |
+| optimized_cached | **D. response cache (re-run)** | 0.0003 | −98% | 4.3 s | 7,694 | 18/18 |
 
-Overall: **$0.1682 → $0.0162 per run (−90%) and 176 s → 17 s E2E** with no golden-set regression on medium and large inputs.
+Overall: **$0.1705 → $0.0172 per run (−90%) and 174 s → 19 s E2E** with no golden-set regression on medium and large inputs.
 
 **Two fixes changed the baseline (October 2026).** (1) The LLM note labeller used to return a bare list of labels matched by position and stored by note text. One skipped label shifted the rest of its batch, and because every copy of a note shared the last label written, the damage spread to the whole dataset. A real model scored 0.359 that way. Labels now carry the note number and are stored per row. Each answer is longer, so the baseline costs more: $0.1277 → $0.1682, and labelling 175 s instead of 102 s simulated. (2) Re-running the benchmark added costs onto the previous run with the same `run_id` (doubling them); `graph.run` now purges a fixed run id first.
 
 **Privacy guard, a side effect on cost.** The datasets now carry candidate, interviewer and hiring-manager names for demos. `metrics.strip_pii` keeps them out of every prompt; before that, the uncompressed panel table sent interviewer names to the LLM. Removing them cut the all-large run on the large input from $0.1304 to $0.1277 with no change in golden results.
 
+**Detectors in the prompt (October 2026).** A real model given only the feature tables raised `high` findings on the `healthy` scenario, where nothing is wrong. Each agent now sends its rule-based detections as `SIGNALS` (the same thresholds the offline analyst uses), and `guard()` caps the LLM's severity at the worst detected signal. That adds about 180 input tokens per agent: +913 tokens and +$0.001 per optimized run. Set `SIGNALS=off` to reproduce the false alarms.
+
 ## How cost scales with input size (baseline scenario)
 
 | Input | Candidates | all_large | routed | routed_compressed | optimized |
 | --- | --- | --- | --- | --- | --- |
-| small | 1.2k | $0.0508 | $0.0263 | $0.0214 | $0.0159 |
-| medium | 6.3k | $0.0774 | $0.0521 | $0.0439 | $0.0161 |
-| large | 25k | $0.1682 | $0.1367 | $0.1279 | $0.0162 |
-| xlarge | 84k | $0.4456 | $0.3959 | $0.3859 | $0.0163 |
+| small | 1.2k | $0.0532 | $0.0273 | $0.0224 | $0.0169 |
+| medium | 6.3k | $0.0797 | $0.0531 | $0.0449 | $0.0171 |
+| large | 25k | $0.1705 | $0.1377 | $0.1289 | $0.0172 |
+| xlarge | 84k | $0.4479 | $0.3969 | $0.3869 | $0.0173 |
 
 With an LLM labelling notes, cost grows linearly with the number of notes. With OpenJev the run cost is flat: agents see aggregated features whose size does not depend on candidate count.
 
@@ -439,7 +441,7 @@ With an LLM labelling notes, cost grows linearly with the number of notes. With 
 
 **A. Routing (−19% on large input, −48% on small).** Panel Load, Pipeline Health and Sourcing go to the small model on rule scores; Rejection and Offers go large through an OpenJev tie-break ("does this need causal reasoning?"). Golden score unchanged on medium/large.
 
-**B. Compression (−6% of run cost here; insight-agent input tokens −28% on small and −52% on large inputs: 7,878 → 5,697 and 12,746 → 6,074).** Run cost moves less because, in this variant, note labelling still dominates. Top-N rows, pruned columns, `top_k` 2. The golden set caught a regression: trimming the panel table to the top and bottom 8 interviewers distorted the median, so Panel Load stopped flagging overload (15/18). Fix: compute the panel median before trimming and pass it as a column. After the fix: 18/18. A second issue surfaced when the guide's chapter outputs were compared: keeping only the top 8 rows truncated the overloaded list ("8 over policy" where the full table showed 10). Compressed tables now keep every over-policy row.
+**B. Compression (−6% of run cost here; insight-agent input tokens −25% on small and −49% on large inputs: 8,815 → 6,633 and 13,658 → 6,986).** Run cost moves less because, in this variant, note labelling still dominates. Top-N rows, pruned columns, `top_k` 2. The golden set caught a regression: trimming the panel table to the top and bottom 8 interviewers distorted the median, so Panel Load stopped flagging overload (15/18). Fix: compute the panel median before trimming and pass it as a column. After the fix: 18/18. A second issue surfaced when the guide's chapter outputs were compared: keeping only the top 8 rows truncated the overloaded list ("8 over policy" where the full table showed 10). Compressed tables now keep every over-policy row.
 
 **C. OpenJev (−87%).** Labelling 14.7k free-text notes moved from 295 batched small-LLM calls ($0.112) to local NLI decisions. It also removed ~150 s of simulated E2E latency. In this build OpenJev ran as the keyword fallback (no Hugging Face access); label accuracy vs planted truth was 0.92 with the 3 deliberately ambiguous note templates (about 8% of notes) left `unclassified` instead of guessed. The real model (`qwen3.5-0.8b-nli-v2s-long`) was then measured on a laptop CPU. With plain-statement hypotheses it labelled every clear note correctly (1.00, against 0.385 with the first question-style wording; see [OPENJEV.md](OPENJEV.md)). It took about **8.4 s per unique note**. The synthetic data has 25 note templates and labels are memoised, so the run here stays a few minutes. Real notes are mostly unique, and 14.7k notes would take ~34 h on that CPU against ~150 s for the batched small LLM. So lever C is a **cost** saving that becomes a **latency** loss on CPU. It is worth taking on a GPU, or for the low-volume yes/no decisions; for bulk note labelling on CPU, keep the small LLM.
 

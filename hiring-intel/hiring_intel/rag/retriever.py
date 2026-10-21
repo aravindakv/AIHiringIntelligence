@@ -5,6 +5,8 @@ Embeddings (env EMBEDDINGS): 'minilm' = sentence-transformers all-MiniLM-L6-v2 (
 """
 from __future__ import annotations
 
+import logging
+
 import os
 import pathlib
 import threading
@@ -21,6 +23,7 @@ _LOCK = threading.RLock()       # Chroma client is not safe for concurrent first
 KB_DIR = ROOT / "data/knowledge"
 CHROMA_DIR = os.getenv("CHROMA_DIR", str(ROOT / "data/chroma"))
 COLLECTION = "hiring_kb"
+log = logging.getLogger("hiring_intel.rag")
 # cosine-distance cutoff per embedding backend; tune on labelled queries (scripts/tune_rag.py)
 DEFAULT_MAX_DISTANCE = {"minilm": 0.6, "hashing": 0.9}
 
@@ -63,11 +66,14 @@ def _client():
 
 
 def build_index(extra_docs: list[tuple[str, str, dict]] | None = None) -> int:
-    ef, _ = embedding_fn()
+    ef, ef_name = embedding_fn()
     client = _client()
     if COLLECTION in [c.name for c in client.list_collections()]:
         client.delete_collection(COLLECTION)
-    col = client.create_collection(COLLECTION, embedding_function=ef, metadata={"hnsw:space": "cosine"})
+    # the embedding name is stored so a later switch (hashing -> MiniLM) triggers a rebuild, not a
+    # dimension error on every query
+    col = client.create_collection(COLLECTION, embedding_function=ef,
+                                   metadata={"hnsw:space": "cosine", "embedding": ef_name})
     ids, docs, metas = [], [], []
     for f in sorted(pathlib.Path(KB_DIR).glob("*.md")):
         _, fm, body = f.read_text().split("---", 2)
@@ -76,7 +82,8 @@ def build_index(extra_docs: list[tuple[str, str, dict]] | None = None) -> int:
         docs.append(body.strip())
         metas.append(_meta(meta))
     for doc_id, text, meta in extra_docs or []:
-        ids.append(doc_id); docs.append(text); metas.append(_meta(meta))
+        if doc_id not in ids:                      # knowledge-base files win over a preserved copy
+            ids.append(doc_id); docs.append(text); metas.append(_meta(meta))
     col.add(ids=ids, documents=docs, metadatas=metas)
     retrieve.cache_clear()
     return len(ids)
@@ -87,13 +94,28 @@ def _meta(meta: dict) -> dict:
     return {"doc_type": meta.get("doc_type", "note"), "role": meta.get("role", "all"),
             "agents": ",".join(agents), **{f"agent_{a}": True for a in agents}}
 
+def _past_insights(client) -> list[tuple[str, str, dict]]:
+    """Human-approved insights live only in the index; keep them across a rebuild."""
+    try:
+        got = client.get_collection(COLLECTION).get(where={"doc_type": "past_insight"})
+    except Exception:
+        return []
+    return [(i, d, {"doc_type": "past_insight", "role": m.get("role", "all"),
+                    "agents": [a for a in m.get("agents", "").split(",") if a]})
+            for i, d, m in zip(got["ids"], got["documents"], got["metadatas"])]
 
 @lru_cache(maxsize=1)
 def _collection():
-    ef, _ = embedding_fn()
+    ef, ef_name = embedding_fn()
     client = _client()
-    if COLLECTION not in [c.name for c in client.list_collections()]:   # first start on an empty volume
+    names = [c.name for c in client.list_collections()]
+    if COLLECTION not in names:                                   # first start on an empty volume
         build_index()
+    else:
+        built_with = (client.get_collection(COLLECTION).metadata or {}).get("embedding")
+        if built_with != ef_name:
+            log.warning("RAG index was built with %s embeddings, now using %s: rebuilding", built_with, ef_name)
+            build_index(_past_insights(client))
     return client.get_collection(COLLECTION, embedding_function=ef)
 
 
@@ -113,7 +135,8 @@ def retrieve(query: str, agent: str, role: str | None = None, k: int = 4) -> tup
     try:
         with _LOCK:
             res = _collection().query(query_texts=[query], n_results=k, where=where)
-    except Exception:
+    except Exception as e:                       # agents carry on as "degraded"; say why in the log
+        log.warning("RAG query failed for %s: %s: %s", agent, type(e).__name__, e)
         return tuple()
     cutoff = float(os.getenv("RAG_MAX_DISTANCE", DEFAULT_MAX_DISTANCE[embedding_fn()[1]]))
     return tuple((i, d) for i, d, dist in zip(res["ids"][0], res["documents"][0], res["distances"][0])

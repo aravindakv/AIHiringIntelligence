@@ -14,6 +14,8 @@
   - interrupt/resume works;
   - A2A returns the contract;
   - LLM note labels land on the right rows even when the model skips or reorders;
+  - a real model can't raise alarms on a healthy pipeline;
+  - the RAG index rebuilds when the embedding model changes, keeping approved insights;
   - no name from the dataset appears in any prompt.
 - **CI tiers:**
   - every push: unit tests + golden set offline (must stay 18/18 on medium) + DeepEval offline;
@@ -232,6 +234,83 @@ def test_llm_labels_match_by_number_not_position(monkeypatch):
     assert got.to_dict() == {10: "unclassified", 11: "fundamentals", 12: "coding"}
 ```
 
+Two more came from running a real model: the healthy-scenario false alarms, and every agent `degraded` after MiniLM was installed over an offline-built index.
+
+**File:** `tests/test_signals.py`
+```python
+import json
+from types import SimpleNamespace
+
+from hiring_intel.agents.insight_agents import AGENTS
+from hiring_intel.contracts import LLMInsights
+from hiring_intel.ingest import load_all
+from hiring_intel.rag.retriever import retrieve
+
+
+def test_real_model_cannot_raise_alarms_on_a_healthy_pipeline(monkeypatch):
+    """A real model given raw tables flagged noise as 'high' on the healthy scenario. The rule detector's
+    SIGNALS go into the prompt, and guard() caps severity at the worst detected signal."""
+    agent, data = AGENTS["panel_load"], load_all("data/raw/healthy_small")
+    feats = agent.features(data)
+    sig = agent.analyze(feats, retrieve(agent.rag_query, agent.name, None, 4))
+    assert {i.severity for i in sig.insights} == {"low"}            # the detector says: no action
+
+    alarm = sig.insights[0].model_copy(update={"title": "Interview Load Imbalance Detected", "severity": "high"})
+    seen = {}
+
+    def fake_completion(**kw):
+        seen["user"] = kw["messages"][1]["content"]
+        content = LLMInsights(insights=[alarm, alarm]).model_dump_json()
+        return SimpleNamespace(usage=SimpleNamespace(prompt_tokens=500, completion_tokens=200),
+                               choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+    import litellm
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    monkeypatch.setenv("LLM_BACKEND", "litellm")
+    out = agent.run(data, "t-signals", force_tier="small")
+    assert "SIGNALS (passed thresholds in code)" in seen["user"]
+    assert out.status != "failed", out.error
+    assert [i.severity for i in out.insights] == ["low"]           # capped, and trimmed to one finding
+```
+
+**File:** `tests/test_rag_rebuild.py`
+```python
+import numpy as np
+from chromadb import EmbeddingFunction
+
+from hiring_intel.rag import retriever as R
+
+
+class Fake384(EmbeddingFunction):
+    """Stands in for MiniLM (384 dims) without a download."""
+    def __init__(self):
+        pass
+
+    def __call__(self, input):
+        return [np.ones(384, dtype=np.float32) / 20 for _ in input]
+
+    @staticmethod
+    def name():
+        return "fake-384"
+
+
+def test_index_rebuilds_when_embeddings_change(tmp_path, monkeypatch):
+    """Index built offline with hashing (512 dims), then MiniLM installed (384 dims): every query used to
+    fail with a dimension error and every agent showed 'degraded'. Approved insights must survive."""
+    monkeypatch.setattr(R, "CHROMA_DIR", str(tmp_path))
+    monkeypatch.setattr(R, "embedding_fn", lambda: (R.HashingEmbedding(), "hashing"))
+    R._collection.cache_clear(); R.retrieve.cache_clear()
+    R.build_index()
+    R.add_past_insight("approved_1", "Referral hires converted well last quarter", "sourcing")
+
+    monkeypatch.setattr(R, "embedding_fn", lambda: (Fake384(), "minilm"))
+    monkeypatch.setitem(R.DEFAULT_MAX_DISTANCE, "minilm", 2.0)
+    R._collection.cache_clear(); R.retrieve.cache_clear()
+    ids = [c for c, _ in R.retrieve("referral hire rate", "sourcing", None, 10)]
+    assert ids and "approved_1" in ids
+    R._collection.cache_clear(); R.retrieve.cache_clear()
+```
+
 ## Step 19.2 — GitHub Actions
 
 **File:** `.github/workflows/eval.yml`
@@ -303,11 +382,11 @@ python -c "import yaml; w=yaml.safe_load(open('.github/workflows/eval.yml')); pr
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-14 passed in 11.59s
+16 passed in 6.57s
 jobs: ['offline', 'real-models']
 ```
 
 ## Checkpoint
 
-- [ ] 14 unit tests pass
+- [ ] 16 unit tests pass
 - [ ] after a push, the `offline` job is green; add the three secrets for the nightly job

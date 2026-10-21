@@ -244,22 +244,22 @@ Expected output (captured on a fresh extract, mock backend):
 wrote 18 cases to data/golden/golden_set.jsonl
 variant                     all_large  optimized  optimized_cached  routed  routed_compressed
 scenario            size                                                                     
-baseline            large      0.1277     0.0162            0.0003  0.0962             0.0874
-                    medium     0.0673     0.0161            0.0003  0.0420             0.0339
-                    small      0.0489     0.0159            0.0003  0.0243             0.0195
-                    xlarge     0.3115     0.0163            0.0003  0.2618             0.2518
-comp_crunch         large      0.1221     0.0134            0.0003  0.0935             0.0847
-                    medium     0.0649     0.0135            0.0003  0.0397             0.0314
-                    small      0.0476     0.0134            0.0003  0.0230             0.0173
-healthy             large      0.1098     0.0103            0.0003  0.0889             0.0801
-                    medium     0.0504     0.0102            0.0003  0.0358             0.0276
-                    small      0.0342     0.0111            0.0003  0.0199             0.0148
-interviewer_burnout large      0.1206     0.0136            0.0003  0.0927             0.0842
-                    medium     0.0664     0.0137            0.0003  0.0394             0.0312
-                    small      0.0483     0.0135            0.0003  0.0229             0.0173
-sourcing_shift      large      0.1323     0.0170            0.0003  0.0982             0.0896
-                    medium     0.0718     0.0169            0.0003  0.0439             0.0359
-                    small      0.0519     0.0187            0.0003  0.0273             0.0229
+baseline            large      0.1705     0.0172            0.0003  0.1377             0.1289
+                    medium     0.0797     0.0171            0.0003  0.0531             0.0449
+                    small      0.0532     0.0169            0.0003  0.0273             0.0224
+                    xlarge     0.4479     0.0173            0.0003  0.3969             0.3869
+comp_crunch         large      0.1649     0.0142            0.0003  0.1351             0.1263
+                    medium     0.0773     0.0144            0.0003  0.0507             0.0425
+                    small      0.0520     0.0143            0.0003  0.0260             0.0204
+healthy             large      0.1515     0.0110            0.0003  0.1297             0.1209
+                    medium     0.0619     0.0110            0.0003  0.0464             0.0382
+                    small      0.0381     0.0118            0.0003  0.0227             0.0177
+interviewer_burnout large      0.1631     0.0144            0.0003  0.1339             0.1254
+                    medium     0.0786     0.0145            0.0003  0.0503             0.0421
+                    small      0.0527     0.0144            0.0003  0.0259             0.0203
+sourcing_shift      large      0.1762     0.0181            0.0003  0.1407             0.1321
+                    medium     0.0851     0.0180            0.0003  0.0558             0.0478
+                    small      0.0567     0.0199            0.0003  0.0308             0.0264
 pass rate: 83% (15/18)
 pass rate: 100% (18/18)
 ```

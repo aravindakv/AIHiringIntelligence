@@ -13,6 +13,8 @@
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
+| every agent `degraded` right after installing `requirements-ml.txt` | index built with hashing (512 dims), queries now use MiniLM (384) | update: the index now rebuilds itself; on older code run `build_index()` once |
+| a real LLM raises `high` findings on `healthy` data | the model saw raw tables without thresholds | keep `SIGNALS` on (default); `guard()` caps severity at the detectors' |
 | agents show `degraded` | RAG returned nothing | `python -c "from hiring_intel.rag.retriever import build_index; print(build_index())"`; check `CHROMA_DIR` is writable |
 | MiniLM download fails | no access to Hugging Face | `EMBEDDINGS=hashing` (offline), or pre-download the model |
 | `Couldn't instantiate the backend tokenizer… need sentencepiece or tiktoken` when loading OpenJev | the subfolder doesn't exist in the repo (the model card lists `-v5` checkpoints that aren't published) | use `qwen3.5-0.8b-nli-v2s-long` (CPU) or `qwen3.5-4b-nli-v2` (GPU) in `config/models.yaml` or `OPENJEV_SUBFOLDER`; the code now says which ones exist |

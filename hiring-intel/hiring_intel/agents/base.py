@@ -1,6 +1,7 @@
 """BaseInsightAgent: features -> retrieve -> route -> LLM (or mock analyst) -> calibrate -> contract."""
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -23,8 +24,35 @@ Rules:
 - A recommendation names WHO does WHAT by WHEN, or a measurable target.
 - confidence_score: 0.9+ only with large samples and a large effect; below 0.5 when n < 15.
 - alternative: a cheaper or faster way to reach a similar decision, and its trade-off.
-- If nothing needs action, return one low-severity insight saying so, with the numbers that show it.
+- SIGNALS lists the findings that pass this agent's statistical thresholds (sample size, effect size,
+  policy limits), computed in code. Report ONLY those findings: you may merge or reword them, explain
+  likely causes using CONTEXT, and sharpen the recommendation. Do not raise issues that are not in
+  SIGNALS: a gap in a small sample or inside policy is noise, not a finding.
+- If SIGNALS says no action is needed, return exactly one low-severity insight saying so, with the
+  numbers that show it.
 - Return 1-3 insights, most impactful first."""
+
+SEVERITY = {"low": 0, "medium": 1, "high": 2}
+
+
+def signals_text(sig: LLMInsights) -> str:
+    lines = []
+    for i in sig.insights:
+        evs = "; ".join(f"{e.metric}={e.value} ({', '.join(f'{k}={v}' for k, v in e.segment.items())})"
+                        for e in i.evidence if e.source == "data")
+        lines.append(f"- [{i.severity}] {i.title} | {evs}")
+    return "\n".join(lines) or "- (none)"
+
+
+def guard(insights: list[Insight], sig: LLMInsights) -> list[Insight]:
+    """Code has the last word on severity: an LLM finding can't be more severe than the worst detected
+    signal, and a no-action run stays low. Stops a real model raising alarms on a healthy pipeline."""
+    top = max((SEVERITY[i.severity] for i in sig.insights), default=0)
+    name = {v: k for k, v in SEVERITY.items()}
+    for ins in insights:
+        if SEVERITY[ins.severity] > top:
+            ins.severity = name[top]
+    return insights[:max(1, len(sig.insights))]
 
 
 class BaseInsightAgent:
@@ -59,6 +87,11 @@ class BaseInsightAgent:
             k = rag_k or (2 if compress else 4)
             chunks = retrieve(self.rag_query, self.name, self.role_filter(data), k)
             ctx = "\n".join(f"[{cid}] {txt}" for cid, txt in chunks) or "(no relevant context found)"
+            # detect in code, explain with the LLM: the rule-based analyst is the detector
+            # (SIGNALS=off sends the raw tables only, to show what a model does without it)
+            use_signals = os.getenv("SIGNALS", "on") != "off"
+            sig = self.analyze(feats, chunks)
+            sig_block = f"\n\nSIGNALS (passed thresholds in code):\n{signals_text(sig)}" if use_signals else ""
             profile = TaskProfile(self.name, context_tokens=len(feats_txt + ctx) // 4,
                                   n_segments=feats_txt.count("\n"), needs_causal_reasoning=self.causal,
                                   stakes=self.stakes, last_eval_score=last_eval)
@@ -66,10 +99,12 @@ class BaseInsightAgent:
             parsed, cost = call_structured(
                 agent=self.name, run_id=run_id, model=model,
                 system=SYSTEM_COMMON + "\n\n" + self.prompt(),
-                user=f"FEATURES (computed from ATS data):\n{feats_txt}\n\nCONTEXT (retrieved):\n{ctx}",
-                schema=self.schema, mock_fn=lambda: self.analyze(feats, chunks), use_cache=use_cache)
+                user=f"FEATURES (computed from ATS data):\n{feats_txt}{sig_block}\n\nCONTEXT (retrieved):\n{ctx}",
+                schema=self.schema, mock_fn=lambda: sig, use_cache=use_cache)
             llm_ms = cost.latency_ms
             insights = [self._calibrate(i) for i in parsed.insights]
+            if use_signals:
+                insights = guard(insights, sig)
             return AgentOutput(agent=self.name, run_id=run_id, insights=insights, cost_of_insight=cost,
                                retrieved_chunks=[c for c, _ in chunks],
                                compute_ms=int((time.perf_counter() - t0) * 1000) - (0 if cost.simulated else llm_ms),

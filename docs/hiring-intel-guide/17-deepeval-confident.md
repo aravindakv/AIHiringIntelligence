@@ -349,7 +349,7 @@ DEEPEVAL_JUDGE=openjev OPENJEV_BACKEND=fallback pytest tests_eval/ -q -p no:cach
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-20 passed in 6.99s
+20 passed in 4.82s
 RuntimeError: DEEPEVAL_JUDGE=openjev needs the real OpenJev model
 ```
 

@@ -369,6 +369,8 @@ Expected output (captured on a fresh extract, mock backend):
 
 Baseline surfaces the planted patterns; the healthy control returns low-severity "no action" findings.
 
+With a real LLM (`LLM_BACKEND=litellm`) the titles change on every run, but the shape must not: the same findings on baseline, and only `[low]` on healthy. To see why the detectors are there, run the healthy half once with `SIGNALS=off`. A real model then reports "imbalances" and "low conversion" that are inside policy or rest on tiny samples.
+
 ## Checkpoint
 
 - [ ] all five agents return `ok` (or `degraded` if no RAG context)

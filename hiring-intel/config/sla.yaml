@@ -15,4 +15,4 @@ hitl:
   confidence_below: 0.6
   severity_in: [high]
   eval_flags_any: [hallucination_risk, ungrounded_numbers, invalid_rag_ref]
-  openjev_sensitive_question: "Does this recommendation change compensation, headcount, or an individual person's workload or role?
+  openjev_sensitive_question: "Does this recommendation change compensation, headcount, or an individual person's workload or role?"
