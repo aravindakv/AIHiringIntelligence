@@ -46,6 +46,17 @@ def execute(sql: str, params=()) -> None:
         DB.commit()
 
 
+RUN_TABLES = ("runs", "llm_calls", "decisions", "timings", "agent_outputs", "routing", "eval_results", "review_queue")
+
+
+def purge_run(run_id: str) -> None:
+    """Delete a run's rows before it is re-run under the same id; otherwise its costs add up."""
+    with _lock:
+        for t in RUN_TABLES:
+            DB.execute(f"DELETE FROM {t} WHERE run_id=?", (run_id,))
+        DB.commit()
+
+
 def log_call(agent: str, run_id: str, cost) -> None:
     row = {"ts": _now(), "run_id": run_id, "agent": agent, "model": cost.model, "tier": cost.tier,
                "input_tokens": cost.input_tokens, "output_tokens": cost.output_tokens, "usd": cost.usd,
