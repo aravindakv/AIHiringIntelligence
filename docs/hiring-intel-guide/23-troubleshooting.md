@@ -15,6 +15,10 @@
 | --- | --- | --- |
 | agents show `degraded` | RAG returned nothing | `python -c "from hiring_intel.rag.retriever import build_index; print(build_index())"`; check `CHROMA_DIR` is writable |
 | MiniLM download fails | no access to Hugging Face | `EMBEDDINGS=hashing` (offline), or pre-download the model |
+| `Couldn't instantiate the backend tokenizer… need sentencepiece or tiktoken` when loading OpenJev | the subfolder doesn't exist in the repo (the model card lists `-v5` checkpoints that aren't published) | use `qwen3.5-0.8b-nli-v2s-long` (CPU) or `qwen3.5-4b-nli-v2` (GPU) in `config/models.yaml` or `OPENJEV_SUBFOLDER`; the code now says which ones exist |
+| `deepeval requires click<8.4.0` warning | `huggingface_hub` needs `click>=8.4.2`; the two can't share one environment | run DeepEval from a separate venv (chapter 17), or ignore the warning if you don't use the `deepeval` CLI |
+| real OpenJev labels notes badly or marks most `unclassified` | question-style hypotheses, or a yes/no confidence floor on a multi-class choice | use plain-statement hypotheses (`REJECTION_HYPOTHESES` in `enrich.py`) and `min_confidence_multi` (0.30); compare `accuracy_when_labelled` with `escalated_share` |
+| note labelling takes minutes | ~8 s per unique note on CPU | expected for the 0.8B model on CPU; use a GPU, or `mode="llm"` for many unique notes |
 | OpenJev decisions say `keyword-fallback` | no weights / no `OPENJEV_URL` | `pip install -r requirements-ml.txt` or run the `openjev` service |
 | `DEEPEVAL_JUDGE=openjev needs the real OpenJev model` | fallback can't judge faithfulness | start OpenJev, or use `DEEPEVAL_JUDGE=llm` |
 | LiteLLM 401 / 429 | key missing or rate limited | check `.env`; LiteLLM retries twice, then the agent shows `failed` |

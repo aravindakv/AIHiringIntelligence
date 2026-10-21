@@ -24,8 +24,11 @@ judge:
 # OpenJev handles simple closed-set decisions (no generation, $0 API cost).
 openjev:
   repo: AlexWortega/openjev
-  subfolder: qwen3.5-0.8b-nli-v5  # 0.8b runs on CPU; use qwen3.5-4b-nli-v5 on a GPU
+  # checkpoints that exist in the repo: qwen3.5-0.8b-nli-v2s-long (CPU-friendly), qwen3.5-4b-nli-v2 (GPU),
+  # qwen3.5-4b-nli, qwen3.5-35b-a3b-nli. Override with env OPENJEV_SUBFOLDER.
+  subfolder: qwen3.5-0.8b-nli-v2s-long
   # backend: auto | local | http | fallback
   #   auto  = HTTP service if OPENJEV_URL is set, else local weights, else keyword fallback
   backend: auto
-  min_confidence: 0.55            # below this, a decision escalates to the LLM
+  min_confidence: 0.55            # yes / no: below this, a decision escalates to the LLM / a human
+  min_confidence_multi: 0.30      # 3+ options: probability spreads across options, so the floor is lower

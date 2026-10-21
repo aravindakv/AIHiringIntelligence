@@ -299,7 +299,7 @@ Hand-score 10 outputs on the same rubric and report agreement with the LLM judge
 
 ## Note-label accuracy
 
-`enrich.accuracy_vs_truth` compares labels with the generator's hidden truth (`_labels.csv`). Keyword fallback: 0.92, with ambiguous notes left `unclassified`. Measure real OpenJev the same way.
+`enrich()` compares labels with the generator's hidden truth (`_labels.csv`) three ways: `accuracy_vs_truth` (escalated notes count as wrong), `accuracy_when_labelled` (only notes that got a label) and `escalated_share`. Keyword fallback: 0.92 / 1.00 / 0.08, with ambiguous notes left `unclassified`. Real OpenJev on CPU: 0.385 with question-style hypotheses and a 0.55 floor, 1.00 on clear notes with plain-statement hypotheses ([OPENJEV.md](OPENJEV.md)).
 ```
 
 **File:** `docs/EXTERNAL_EVALUATION.md`
@@ -412,13 +412,15 @@ Generated from `data/eval/benchmark.csv` (80 runs: 5 scenarios × 3 sizes + one 
 
 | Variant | Lever added | Run cost (USD) | vs previous | E2E latency | Input tokens | Golden pass |
 | --- | --- | --- | --- | --- | --- | --- |
-| all_large | none: everything on the large model, LLM labels notes | 0.1277 | — | 101.7 s | 269,748 | 18/18 |
-| routed | **A. model routing** | 0.0962 | −25% | 101.3 s | 269,676 | — |
-| routed_compressed | **B. context compression** | 0.0874 | −9% | 98.3 s | 262,966 | 15/18 before fix, 18/18 after |
-| optimized | **C. OpenJev for simple decisions** | 0.0162 | −81% | 16.9 s | 6,794 | 18/18 |
-| optimized_cached | **D. response cache (re-run)** | 0.0003 | −98% | 3.4 s | 6,781 | 18/18 |
+| all_large | none: everything on the large model, LLM labels notes | 0.1682 | — | 175.5 s | 292,241 | 18/18 |
+| routed | **A. model routing** | 0.1367 | −19% | 173.6 s | 292,170 | — |
+| routed_compressed | **B. context compression** | 0.1279 | −6% | 173.1 s | 285,460 | 15/18 before fix, 18/18 after |
+| optimized | **C. OpenJev for simple decisions** | 0.0162 | −87% | 17.1 s | 6,794 | 18/18 |
+| optimized_cached | **D. response cache (re-run)** | 0.0003 | −98% | 3.8 s | 6,781 | 18/18 |
 
-Overall: **$0.1277 → $0.0162 per run (−87%) and 102 s → 17 s E2E** with no golden-set regression on medium and large inputs.
+Overall: **$0.1682 → $0.0162 per run (−90%) and 176 s → 17 s E2E** with no golden-set regression on medium and large inputs.
+
+**Two fixes changed the baseline (October 2026).** (1) The LLM note labeller used to return a bare list of labels matched by position and stored by note text. One skipped label shifted the rest of its batch, and because every copy of a note shared the last label written, the damage spread to the whole dataset. A real model scored 0.359 that way. Labels now carry the note number and are stored per row. Each answer is longer, so the baseline costs more: $0.1277 → $0.1682, and labelling 175 s instead of 102 s simulated. (2) Re-running the benchmark added costs onto the previous run with the same `run_id` (doubling them); `graph.run` now purges a fixed run id first.
 
 **Privacy guard, a side effect on cost.** The datasets now carry candidate, interviewer and hiring-manager names for demos. `metrics.strip_pii` keeps them out of every prompt; before that, the uncompressed panel table sent interviewer names to the LLM. Removing them cut the all-large run on the large input from $0.1304 to $0.1277 with no change in golden results.
 
@@ -426,20 +428,20 @@ Overall: **$0.1277 → $0.0162 per run (−87%) and 102 s → 17 s E2E** with no
 
 | Input | Candidates | all_large | routed | routed_compressed | optimized |
 | --- | --- | --- | --- | --- | --- |
-| small | 1.2k | $0.0489 | $0.0243 | $0.0195 | $0.0159 |
-| medium | 6.3k | $0.0673 | $0.0420 | $0.0339 | $0.0161 |
-| large | 25k | $0.1277 | $0.0962 | $0.0874 | $0.0162 |
-| xlarge | 84k | $0.3114 | $0.2618 | $0.2518 | $0.0163 |
+| small | 1.2k | $0.0508 | $0.0263 | $0.0214 | $0.0159 |
+| medium | 6.3k | $0.0774 | $0.0521 | $0.0439 | $0.0161 |
+| large | 25k | $0.1682 | $0.1367 | $0.1279 | $0.0162 |
+| xlarge | 84k | $0.4456 | $0.3959 | $0.3859 | $0.0163 |
 
 With an LLM labelling notes, cost grows linearly with the number of notes. With OpenJev the run cost is flat: agents see aggregated features whose size does not depend on candidate count.
 
 ## Per lever
 
-**A. Routing (−25% on large input, −50% on small).** Panel Load, Pipeline Health and Sourcing go to the small model on rule scores; Rejection and Offers go large through an OpenJev tie-break ("does this need causal reasoning?"). Golden score unchanged on medium/large.
+**A. Routing (−19% on large input, −48% on small).** Panel Load, Pipeline Health and Sourcing go to the small model on rule scores; Rejection and Offers go large through an OpenJev tie-break ("does this need causal reasoning?"). Golden score unchanged on medium/large.
 
-**B. Compression (−9% of run cost here; insight-agent input tokens −28% on small and −52% on large inputs: 7,878 → 5,697 and 12,746 → 6,074).** Run cost moves less because, in this variant, note labelling still dominates. Top-N rows, pruned columns, `top_k` 2. The golden set caught a regression: trimming the panel table to the top and bottom 8 interviewers distorted the median, so Panel Load stopped flagging overload (15/18). Fix: compute the panel median before trimming and pass it as a column. After the fix: 18/18. A second issue surfaced when the guide's chapter outputs were compared: keeping only the top 8 rows truncated the overloaded list ("8 over policy" where the full table showed 10). Compressed tables now keep every over-policy row.
+**B. Compression (−6% of run cost here; insight-agent input tokens −28% on small and −52% on large inputs: 7,878 → 5,697 and 12,746 → 6,074).** Run cost moves less because, in this variant, note labelling still dominates. Top-N rows, pruned columns, `top_k` 2. The golden set caught a regression: trimming the panel table to the top and bottom 8 interviewers distorted the median, so Panel Load stopped flagging overload (15/18). Fix: compute the panel median before trimming and pass it as a column. After the fix: 18/18. A second issue surfaced when the guide's chapter outputs were compared: keeping only the top 8 rows truncated the overloaded list ("8 over policy" where the full table showed 10). Compressed tables now keep every over-policy row.
 
-**C. OpenJev (−81%).** Labelling 14.7k free-text notes moved from 295 batched small-LLM calls to local NLI decisions. It also removed ~81 s of simulated E2E latency. In this build OpenJev ran as the keyword fallback (no Hugging Face access); label accuracy vs planted truth was 0.92 with the 3 deliberately ambiguous note templates (about 8% of notes) left `unclassified` instead of guessed. Measure the real model's accuracy and CPU time before you quote this lever.
+**C. OpenJev (−87%).** Labelling 14.7k free-text notes moved from 295 batched small-LLM calls ($0.112) to local NLI decisions. It also removed ~150 s of simulated E2E latency. In this build OpenJev ran as the keyword fallback (no Hugging Face access); label accuracy vs planted truth was 0.92 with the 3 deliberately ambiguous note templates (about 8% of notes) left `unclassified` instead of guessed. The real model (`qwen3.5-0.8b-nli-v2s-long`) was then measured on a laptop CPU. With plain-statement hypotheses it labelled every clear note correctly (1.00, against 0.385 with the first question-style wording; see [OPENJEV.md](OPENJEV.md)). It took about **8.4 s per unique note**. The synthetic data has 25 note templates and labels are memoised, so the run here stays a few minutes. Real notes are mostly unique, and 14.7k notes would take ~34 h on that CPU against ~150 s for the batched small LLM. So lever C is a **cost** saving that becomes a **latency** loss on CPU. It is worth taking on a GPU, or for the low-volume yes/no decisions; for bulk note labelling on CPU, keep the small LLM.
 
 **D. Cache (−98% on repeats).** Identical prompt + model returns the stored response. It helps re-runs on unchanged data and the demo; it does nothing on fresh data, so it is reported separately.
 
@@ -510,9 +512,9 @@ Code: [`hiring_intel/openjev.py`](../hiring_intel/openjev.py), service: [`servic
 
 ## What it is
 
-OpenJev ([huggingface.co/AlexWortega/openjev](https://huggingface.co/AlexWortega/openjev), MIT licence per its model card) is Qwen3.5 fine-tuned as an NLI **cross-encoder**. Given a premise and a hypothesis it returns P(contradiction), P(entailment), P(neutral). To decide between options you score one hypothesis per option and take the highest entailment. It does not generate text, it is deterministic, and its option scores do not depend on option order.
+OpenJev ([huggingface.co/AlexWortega/openjev](https://huggingface.co/AlexWortega/openjev), MIT licence per its model card) is Qwen3.5 fine-tuned as an NLI **cross-encoder**. Given a premise and a hypothesis it returns P(contradiction), P(entailment), P(neutral). To decide between options you score one hypothesis per option and take the highest entailment. Write each hypothesis as a plain statement ("The candidate's system design was weak."), not as a question with an answer appended; the measurements below show why. It does not generate text, it is deterministic, and its option scores do not depend on option order.
 
-Checkpoints (subfolders of the repo): `qwen3.5-4b-nli-v5` (recommended for typed decisions), `qwen3.5-2b-nli-v5`, `qwen3.5-0.8b-nli-v5` (CPU-friendly; the default here).
+Checkpoints that exist in the repo (checked October 2026): `qwen3.5-0.8b-nli-v2s-long` (CPU-friendly; the default here), `qwen3.5-4b-nli-v2` (reads text and images; use on a GPU), `qwen3.5-4b-nli` (v1, text only) and `qwen3.5-35b-a3b-nli` (35B mixture-of-experts). The model card also describes `…-nli-v5` checkpoints that are not in the repo; loading one fails with a misleading tokenizer error. `LocalOpenJev` now checks the subfolder first and lists the real ones. All of them use the labels contradiction / entailment / neutral and `nli_template = "Premise: {premise}\nHypothesis: {hypothesis}"`.
 
 ## Where this system uses it
 
@@ -524,7 +526,7 @@ Checkpoints (subfolders of the repo): `qwen3.5-4b-nli-v5` (recommended for typed
 | HITL sensitivity | the recommendation | yes / no "changes comp, headcount or workload?" | Gate on every insight |
 | Actionability pre-check | the recommendation | yes / no "specific and actionable?" | Cheap signal for the evaluator |
 
-Every decision is logged to the `decisions` table with its backend, confidence and whether it **escalated**: below `openjev.min_confidence` (0.55) the system does not trust it. Note labels become `unclassified`, routing falls back to a small-LLM call, and HITL marks the item "sensitivity unclear" for a human.
+Every decision is logged to the `decisions` table with its backend, confidence and whether it **escalated**. A decision escalates when its confidence is below the floor for its option count (`min_confidence` 0.55 for yes/no, `min_confidence_multi` 0.30 for 3+ options, because probability spreads across more options), or when it picks the **abstain** option. Note labelling adds an `unclear` option ("The note does not name any specific skill, problem or reason.") so a vague note can say so instead of being forced into a label. Note labels become `unclassified`, routing falls back to a small-LLM call, and HITL marks the item "sensitivity unclear" for a human.
 
 ## Backends
 
@@ -535,13 +537,33 @@ Every decision is logged to the `decisions` table with its backend, confidence a
 | `fallback` | No weights available (offline CI, this build) | none; keyword scorer with the same interface |
 | `auto` (default) | http if `OPENJEV_URL` set, else local, else fallback | — |
 
-The committed benchmark used **fallback** because the build machine could not reach Hugging Face. Re-run the benchmark with the real model and replace the numbers.
+The committed benchmark used **fallback** because the build machine could not reach Hugging Face. The real model was then measured on a laptop CPU (below).
+
+## Measured with the real model (`qwen3.5-0.8b-nli-v2s-long`, CPU, October 2026)
+
+Rejection notes on `baseline_small`: 710 notes, 21 unique note texts, 18 of them with a clear reason. Accuracy is weighted by how often each note occurs.
+
+| Setup | Accuracy on clear notes |
+| --- | --- |
+| question hypotheses (`"What is the main reason…? Answer: fundamentals"`), floor 0.55 | 0.41 (the first run reported 0.385 overall) |
+| question hypotheses, no floor | 0.73 |
+| **plain-statement hypotheses**, no floor | **1.00** |
+| plain-statement hypotheses, floor 0.30 | **1.00** |
+| plain-statement + `unclear` option, through `enrich()` on `baseline_large` (14.7k notes) | **1.00** when labelled; 17.7% escalated (8% are truly ambiguous) |
+
+What this shows:
+
+1. **Hypothesis wording mattered most.** Labels such as "culture add" or "JD mismatch" in a question template lost to near-synonyms; a one-sentence description of each label fixed every clear note.
+2. **A yes/no floor kills multi-class decisions.** With 7 options, correct answers often scored 0.36–0.5. The 0.55 floor marked them `unclassified`, and accuracy counts that as wrong.
+3. **Ambiguous notes are not escalated by a floor alone.** "Mixed signals across the loop" got `culture add` at 0.73. The raw entailment was 0.13 (the model did not believe it), but normalising across options hid that. The `unclear` abstain option fixes that: nothing is mislabelled now. It is too cautious, though. It escalates 17.7% of notes against 8% truly ambiguous ones, so some clear notes go to a human. The likely culprits are the notes whose raw entailment was lowest ("Applied for a different scope than the posting", "Expected Kotlin/Swift depth per job description", "Could not partition the service…"). Tune `UNCLEAR_HYPOTHESIS` and those label sentences on your own labelled notes.
+
+**Latency:** about 8.4 s per unique note on CPU with 7 hypotheses, 10.4 s with 8 (the `unclear` option adds one; scored in one batch through the HTTP service). The system memoises by note text, so the synthetic data (25 templates) labels in about 3–4 minutes at any size. Real notes are mostly unique: 14.7k notes would take about 34 hours on that CPU. For production, run the `openjev` service on a GPU, or keep note labelling on the small LLM and use OpenJev only for the low-volume yes/no gates (routing, HITL sensitivity, actionability), where 2–3 s per decision is acceptable.
 
 ## Loading the model directly
 
 ```python
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-sub = "qwen3.5-0.8b-nli-v5"
+sub = "qwen3.5-0.8b-nli-v2s-long"
 tok = AutoTokenizer.from_pretrained("AlexWortega/openjev", subfolder=sub)
 model = AutoModelForSequenceClassification.from_pretrained("AlexWortega/openjev", subfolder=sub)
 text = model.config.nli_template.format(premise="...", hypothesis="...")
@@ -551,11 +573,11 @@ text = model.config.nli_template.format(premise="...", hypothesis="...")
 
 ## Caveats to put in your eval notes
 
-- **Calibration:** probabilities are not calibrated for your labels. Tune `min_confidence` on 50 hand-labelled notes.
+- **Calibration:** probabilities are not calibrated for your labels. Tune `min_confidence_multi` and the hypothesis sentences on 50 hand-labelled notes; `enrich()` reports `accuracy_when_labelled` and `escalated_share` separately so you can see which way a change moved.
 - **Prompt injection:** the model card reports that one adversarial line sharply lowers accuracy. Never use OpenJev alone as a safety gate; pair it with deterministic checks (the HITL policy also uses severity, confidence and eval flags).
 - **Benchmark contamination:** the v5 checkpoints were trained on test splits of public benchmarks (per the card), so public benchmark scores are not evidence. Your own labelled notes are.
 - **Licence:** the Hugging Face weights are MIT per the card. A separate Docker Hub image (`ai/openjev`) states CC BY-NC 4.0 for its source weights; check which artefact you deploy.
-- **Cost model:** $0 API, but CPU/GPU time. Measure notes/second on your box (`/decide` endpoint) and add it to the latency table.
+- **Cost model:** $0 API, but CPU/GPU time: about 8.4 s per 7-option note on a laptop CPU. `enrich()` reports `ms_per_unique_note`; multiply by your number of unique notes before choosing this lever.
 ````
 
 ## Step 21.6 — Reflection and demo

@@ -71,6 +71,8 @@ EMBEDDINGS=auto
 # OpenJev: auto | http | local | fallback ; when http, where the service runs
 OPENJEV_BACKEND=auto
 OPENJEV_URL=
+# Hugging Face read token: faster model downloads, no rate-limit warnings (huggingface.co -> Settings -> Access Tokens)
+HF_TOKEN=
 # A2A: where the agent server runs (transport=a2a)
 A2A_BASE_URL=http://localhost:8100
 HI_DB=data/runs.db
@@ -113,6 +115,8 @@ data/eval/runs
 cp .env.example .env
 ```
 
+`.env` is where every secret goes: `OPENAI_API_KEY`, `LANGSMITH_API_KEY` and `HF_TOKEN` (a free Hugging Face read token from huggingface.co → Settings → Access Tokens; it speeds up model downloads and removes the "unauthenticated requests" warning). It is in `.gitignore`; never commit it.
+
 ## Step 1.4 — Model tiers and prices
 
 Two tiers: **small** for agents that mostly read thresholds, **large** for causal reasoning and compensation decisions. The `sim_*` values are used only by the mock backend to simulate latency. The prices are examples: replace them from your provider's pricing page before you quote USD.
@@ -145,11 +149,14 @@ judge:
 # OpenJev handles simple closed-set decisions (no generation, $0 API cost).
 openjev:
   repo: AlexWortega/openjev
-  subfolder: qwen3.5-0.8b-nli-v5  # 0.8b runs on CPU; use qwen3.5-4b-nli-v5 on a GPU
+  # checkpoints that exist in the repo: qwen3.5-0.8b-nli-v2s-long (CPU-friendly), qwen3.5-4b-nli-v2 (GPU),
+  # qwen3.5-4b-nli, qwen3.5-35b-a3b-nli. Override with env OPENJEV_SUBFOLDER.
+  subfolder: qwen3.5-0.8b-nli-v2s-long
   # backend: auto | local | http | fallback
   #   auto  = HTTP service if OPENJEV_URL is set, else local weights, else keyword fallback
   backend: auto
-  min_confidence: 0.55            # below this, a decision escalates to the LLM / a human
+  min_confidence: 0.55            # yes / no: below this, a decision escalates to the LLM / a human
+  min_confidence_multi: 0.30      # 3+ options: probability spreads across options, so the floor is lower
 ```
 
 ## Step 1.5 — SLA and human-review policy
@@ -178,10 +185,24 @@ hitl:
 
 ## Step 1.6 — Packages and Makefile
 
-Python needs empty `__init__.py` files to treat the folders as packages.
+Python needs `__init__.py` files to treat the folders as packages. The top-level one also loads `.env` on first import, so your keys and switches work for plain `python …` runs, not only in Docker. Variables set in your shell win over `.env`.
 
 **File:** `hiring_intel/__init__.py`
 ```python
+"""Hiring Intelligence System.
+
+Loads the repo's .env on first import, so settings such as LLM_BACKEND, OPENAI_API_KEY, LANGSMITH_API_KEY
+and HF_TOKEN work for plain `python ...` runs too (Docker Compose passes .env via env_file). Variables
+already set in the shell win over .env.
+"""
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:  # python-dotenv not installed: rely on the shell environment
+    pass
 ```
 
 **File:** `hiring_intel/agents/__init__.py`

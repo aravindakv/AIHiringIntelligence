@@ -95,8 +95,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.openjev
+    env_file: .env                          # HF_TOKEN for the model download
     environment:
-      OPENJEV_SUBFOLDER: qwen3.5-0.8b-nli-v5
+      OPENJEV_SUBFOLDER: qwen3.5-0.8b-nli-v2s-long
     ports: ["8200:8200"]
     volumes:
       - models:/models                      # weights cached across restarts
@@ -200,7 +201,7 @@ Containers restart automatically (`restart: unless-stopped`) and come back after
 
 ## 7. GPU for OpenJev (optional)
 
-Use a CUDA base image in `Dockerfile.openjev` (for example `pytorch/pytorch` with CUDA runtime), install the NVIDIA Container Toolkit, set `OPENJEV_SUBFOLDER=qwen3.5-4b-nli-v5`, and add to the `openjev` service:
+Use a CUDA base image in `Dockerfile.openjev` (for example `pytorch/pytorch` with CUDA runtime), install the NVIDIA Container Toolkit, set `OPENJEV_SUBFOLDER=qwen3.5-4b-nli-v2`, and add to the `openjev` service:
 
 ```yaml
     deploy:

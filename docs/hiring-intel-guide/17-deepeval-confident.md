@@ -212,7 +212,7 @@ def build_metrics(mode: str | None = None) -> list:
                                         include_reason=False, async_mode=False)]
     elif mode == "llm":
         from deepeval.metrics import FaithfulnessMetric, GEval, HallucinationMetric
-        model = os.getenv("DEEPEVAL_MODEL")                      # e.g. gpt-4o; None = DeepEval default
+        model = os.getenv("DEEPEVAL_MODEL") or None              # e.g. gpt-4o; None = DeepEval default
         metrics += [
             FaithfulnessMetric(threshold=0.7, model=model),
             HallucinationMetric(threshold=0.5, model=model),
@@ -349,7 +349,7 @@ DEEPEVAL_JUDGE=openjev OPENJEV_BACKEND=fallback pytest tests_eval/ -q -p no:cach
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-20 passed in 5.80s
+20 passed in 6.99s
 RuntimeError: DEEPEVAL_JUDGE=openjev needs the real OpenJev model
 ```
 

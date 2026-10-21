@@ -59,7 +59,7 @@ from hiring_intel.agents.optimizer import optimize
 from hiring_intel.contracts import AgentOutput, Evidence, ReviewItem
 from hiring_intel.enrich import enrich
 from hiring_intel.ingest import load_all
-from hiring_intel.observability import execute, log_timing
+from hiring_intel.observability import execute, log_timing, purge_run
 from hiring_intel.openjev import decider
 
 
@@ -234,6 +234,8 @@ def run(data_path: str = "data/raw/baseline_small", *, scenario: str = "", size:
         force_tier: str | None = None, compress: bool = False, use_cache: bool = False, classify: str = "openjev",
         hitl_mode: str = "queue", transport: str = "local", inject_fault: str | None = None,
         crash_agent: str | None = None, run_id: str | None = None, graph=None) -> dict:
+    if run_id:
+        purge_run(run_id)          # a fixed id (benchmark, golden set) re-runs from a clean slate
     run_id = run_id or f"{variant}-{dt.datetime.now().strftime('%m%d%H%M%S')}-{uuid.uuid4().hex[:4]}"
     cfg = dict(data_path=data_path, scenario=scenario, size=size, variant=variant, force_tier=force_tier,
                compress=compress, use_cache=use_cache, classify=classify, hitl_mode=hitl_mode, transport=transport,
@@ -326,7 +328,7 @@ EOF
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-run optimized-1019050429-35b6 done; errors: []
+run optimized-1021062413-5e6a done; errors: []
   offers      [high  ] Offers below 90% of expected CTC are being declined
   panel_load  [high  ] 10 interviewers over load policy
   pipeline    [medium] SRE onsite breaches SLA
@@ -338,7 +340,7 @@ run optimized-1019050429-35b6 done; errors: []
 retried: ['offers', 'sourcing'] | errors: ['offers: RuntimeError: injected crash']
 scores after retry: {'offers': 0.97, 'panel_load': 0.97, 'pipeline': 0.97, 'rejection': 0.97, 'sourcing': 0.97}
 optimizer: ['Trial the small model for rejection', 'Compress rejection context', 'Trial the small model for sourcing']
-E2E by stage (ms): {'ingest': 68, 'enrich': 75, 'evaluate': 238, 'human_review': 28, 'optimize': 3767, 'agents': 14945, 'retry': 13664}
+E2E by stage (ms): {'ingest': 123, 'enrich': 77, 'evaluate': 264, 'human_review': 32, 'optimize': 3769, 'agents': 15439, 'retry': 13661}
 ```
 
 Interactive review in the terminal:

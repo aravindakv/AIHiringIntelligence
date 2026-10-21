@@ -13,6 +13,7 @@
   - a crashed agent and a faked agent both recover;
   - interrupt/resume works;
   - A2A returns the contract;
+  - LLM note labels land on the right rows even when the model skips or reorders;
   - no name from the dataset appears in any prompt.
 - **CI tiers:**
   - every push: unit tests + golden set offline (must stay 18/18 on medium) + DeepEval offline;
@@ -95,6 +96,31 @@ def test_fallback_choose_and_escalate():
     amb = d.choose("t", "Not the right fit.", "reason?", ["fundamentals", "coding"],
                    keywords={"fundamentals": ["sql"], "coding": ["bugs"]})
     assert amb.escalated
+
+
+class _Fixed:
+    """A fake model backend that returns fixed entailment scores."""
+    name = "fixed"
+
+    def __init__(self, scores):
+        self.scores, self.seen = scores, None
+
+    def entail(self, premise, hypotheses):
+        self.seen = (premise, hypotheses)
+        return self.scores
+
+
+def test_hypotheses_floor_and_abstain():
+    opts = ["a", "b", "c", "unclear"]
+    b = _Fixed([0.4, 0.3, 0.2, 0.1])                      # top normalised prob 0.4: ok for 4 options
+    d = OpenJevDecider(b).choose("t", "note", "q?", opts, hypotheses={o: f"It is {o}." for o in opts},
+                                 premise_prefix="Note: ", abstain="unclear")
+    assert d.choice == "a" and not d.escalated
+    assert b.seen == ("Note: note", ["It is a.", "It is b.", "It is c.", "It is unclear."])
+    d2 = OpenJevDecider(_Fixed([0.1, 0.1, 0.1, 0.7])).choose("t", "note", "q?", opts, abstain="unclear")
+    assert d2.choice == "unclear" and d2.escalated          # abstaining always escalates
+    d3 = OpenJevDecider(_Fixed([0.48, 0.52])).yes_no("t", "note", "q?")
+    assert d3.escalated                                     # yes / no keeps the 0.55 floor
 ```
 
 **File:** `tests/test_graph.py`
@@ -174,6 +200,38 @@ def test_no_names_in_any_prompt(monkeypatch):
     assert not leaked, f"names leaked into prompts: {leaked[:5]}"
 ```
 
+The enrichment test fakes a careless real model: it skips one note, reorders the rest and changes the case of a label. Labels must still land on the right rows. The first version matched labels by position and stored them by note text, so one skipped label relabelled every copy of the following notes; a real model scored 0.359 that way.
+
+**File:** `tests/test_enrich.py`
+```python
+import json
+from types import SimpleNamespace
+
+import pandas as pd
+
+from hiring_intel import enrich as E
+from hiring_intel.openjev import KeywordFallback, OpenJevDecider
+
+
+def test_llm_labels_match_by_number_not_position(monkeypatch):
+    """A real model may skip a note, reorder, or change case; labels must still land on the right rows."""
+    notes = pd.Series(["Code was messy and incorrect on edge cases.", "Weak on SQL joins.",
+                       "Code was messy and incorrect on edge cases."], index=[10, 11, 12])
+
+    def fake_completion(**kw):
+        content = json.dumps({"labels": [{"i": 3, "label": "Coding"}, {"i": 2, "label": "fundamentals"}]})
+        return SimpleNamespace(usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
+                               choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+    import litellm
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    monkeypatch.setenv("LLM_BACKEND", "litellm")
+    got = E._classify(OpenJevDecider(KeywordFallback()), "t-enrich", "classify_rejection_note", notes,
+                      E.REJECTION_LABELS, mode="llm")
+    # note 1 was skipped: unclassified, not shifted; same text in row 12 keeps its own label
+    assert got.to_dict() == {10: "unclassified", 11: "fundamentals", 12: "coding"}
+```
+
 ## Step 19.2 — GitHub Actions
 
 **File:** `.github/workflows/eval.yml`
@@ -245,11 +303,11 @@ python -c "import yaml; w=yaml.safe_load(open('.github/workflows/eval.yml')); pr
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-12 passed in 5.15s
+14 passed in 11.59s
 jobs: ['offline', 'real-models']
 ```
 
 ## Checkpoint
 
-- [ ] 12 unit tests pass
+- [ ] 14 unit tests pass
 - [ ] after a push, the `offline` job is green; add the three secrets for the nightly job
