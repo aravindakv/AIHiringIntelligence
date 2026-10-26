@@ -8,6 +8,8 @@
 
 `overall = 0.35 × grounded + 0.15 × refs_valid + 0.5 × judge`, **capped at 0.55 when any number is ungrounded**. Below 0.6 → one retry on the large model.
 
+Ask answers ([ASK.md](ASK.md)) get layers 1 and 2 plus the severity cap; they skip the judge to keep a question cheap. The grounding score is shown with every answer, and a score under 0.8 adds an `ungrounded_numbers` flag and a warning.
+
 ## Golden set
 
 `data/golden/golden_set.jsonl`: 18 scenarios over 5 input types. Each names an agent and an expectation (title must mention X, minimum or maximum severity, forbidden titles). It includes a **healthy control** where nothing should be raised above low, and trap expectations (no `[jd]` root cause when the problem is sourcing).
@@ -52,4 +54,4 @@ Hand-score 10 outputs on the same rubric and report agreement with the LLM judge
 
 ## Note-label accuracy
 
-`enrich.accuracy_vs_truth` compares labels with the generator's hidden truth (`_labels.csv`). Keyword fallback: 0.92, with ambiguous notes left `unclassified`. Measure real OpenJev the same way.
+`enrich()` compares labels with the generator's hidden truth (`_labels.csv`) three ways: `accuracy_vs_truth` (escalated notes count as wrong), `accuracy_when_labelled` (only notes that got a label) and `escalated_share`. Keyword fallback: 0.92 / 1.00 / 0.08, with ambiguous notes left `unclassified`. Real OpenJev on CPU: 0.385 with question-style hypotheses and a 0.55 floor, 1.00 on clear notes with plain-statement hypotheses ([OPENJEV.md](OPENJEV.md)).

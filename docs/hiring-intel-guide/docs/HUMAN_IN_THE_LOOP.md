@@ -16,6 +16,8 @@ Configured in `config/sla.yaml → hitl`. An insight goes to the review queue if
 
 Everything else is `auto_published`.
 
+The same policy applies to insights in answers from the **Ask** tab ([ASK.md](ASK.md)). Their pending items appear in the Human review tab marked "from Ask", under the question's topic agent, and an approved one is written back to RAG like any other.
+
 ## Three modes
 
 | Mode | Behaviour | Use |

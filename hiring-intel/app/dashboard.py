@@ -68,7 +68,7 @@ st.title("Hiring Intelligence")
 st.caption(f"Run `{run_id}` · input `{meta.data_path}` · variant `{meta.variant}` · "
            f"{int(meta.n_candidates):,} candidates")
 
-tabs = st.tabs(["Overview", "Insights", "Human review", "Candidates", "Evaluation", "Cost & latency",
+tabs = st.tabs(["Overview", "Ask", "Insights", "Human review", "Candidates", "Evaluation", "Cost & latency",
                 "Compare inputs", "Run log"])
 
 # ------------------------------------------------------------------ overview
@@ -93,8 +93,106 @@ with tabs[0]:
             badge = status_of.get(f"{run_id}:{agent}:{k}", "")
             st.info(f"**{i.title}** — {agent}, confidence {i.confidence_score:.0%}, *{badge}*\n\n{i.recommendation}")
 
-# ------------------------------------------------------------------ insights
+# ------------------------------------------------------------------ ask: HR's own questions
+def _insight_card(i, status: str = "", expanded: bool = False):
+    with st.expander(f"[{i.severity}] {i.title} — {i.confidence_score:.0%}" + (f" · {status}" if status else ""),
+                     expanded=expanded):
+        st.write(i.recommendation)
+        st.dataframe(pd.DataFrame([e.model_dump() for e in i.evidence]).astype({"value": str}), hide_index=True)
+        if i.rebalance_plan:
+            st.dataframe(pd.DataFrame([m.model_dump() for m in i.rebalance_plan]), hide_index=True)
+        st.caption(f"Alternative: {i.alternative.option} — {i.alternative.trade_off}")
+
+
 with tabs[1]:
+    from hiring_intel import ask as askmod
+    st.write("Ask a question about your hiring data in plain English. Answers come from the same aggregated "
+             "tables, detectors and checks as the agents: every number is checked against the data, and "
+             "anything that changes pay, headcount or workload goes to **Human review**. Questions about one "
+             "named person go to **Candidates** instead, so names never reach a model.")
+    run_ds = Path(meta.data_path).name
+    a_ds = st.selectbox("Dataset", DATASETS, index=DATASETS.index(run_ds) if run_ds in DATASETS else 0,
+                        key="ask-ds")
+    if "ask-q-next" in st.session_state:        # set by a follow-up click on the previous run
+        st.session_state["ask-q"] = st.session_state.pop("ask-q-next")
+    st.caption("Examples")
+    ex_cols = st.columns(len(askmod.EXAMPLES))
+    for c_, ex in zip(ex_cols, askmod.EXAMPLES):
+        if c_.button(ex, key=f"ex-{ex}", width="stretch", help=ex):
+            st.session_state["ask-q"] = ex
+    with st.form("ask-form", border=False):                # text and click submit together
+        question = st.text_area("Your question", key="ask-q", max_chars=askmod.MAX_CHARS, height=90,
+                                placeholder="e.g. Which channel should we spend less on for Data roles?")
+        left_, right_ = st.columns([1, 3])
+        tier_choice = left_.selectbox("Model", ["auto (Routing Agent)", "small", "large"], key="ask-tier")
+        submitted = right_.form_submit_button("Ask", type="primary")
+    if submitted and not question.strip():
+        st.warning("Type a question first.")
+    elif submitted:
+        with st.spinner("Routing the question, building context, asking the model..."):
+            res = askmod.ask(question, f"data/raw/{a_ds}",
+                             force_tier=None if tier_choice.startswith("auto") else tier_choice)
+        st.session_state["ask-last"] = res.ask_id
+
+    last = askmod.load(st.session_state["ask-last"]) if st.session_state.get("ask-last") else None
+    if last:
+        st.divider()
+        st.markdown(f"**Q:** {last.question}")
+        if last.kind != "answer":
+            (st.info if last.kind == "person" else st.warning)(last.message)
+        else:
+            st.markdown(last.answer.answer)
+            m = st.columns(5)
+            m[0].metric("Data used", ", ".join(last.agents))
+            m[1].metric("Model tier", last.tier, help=last.cost.model)
+            m[2].metric("Cost", f"${last.cost.usd:.5f}")
+            m[3].metric("Latency", f"{last.latency_ms / 1000:.1f} s")
+            m[4].metric("Numbers grounded", f"{last.grounded:.0%}")
+            if last.flags:
+                st.error("Evaluator flags: " + ", ".join(last.flags) + ". Treat this answer with care.")
+            status = {r["item_id"]: r for r in last.review}
+            live = query("SELECT item_id, status FROM review_queue WHERE run_id=?", (last.ask_id,))
+            live = dict(zip(live.item_id, live.status))
+            for k, i in enumerate(last.answer.insights):
+                iid = f"{last.ask_id}:{last.agents[0]}:{k}"
+                stt = live.get(iid, status.get(iid, {}).get("status", ""))
+                _insight_card(i, stt.replace("_", " "), expanded=k == 0)
+                if stt == "pending":
+                    st.caption("Held for human review: " + "; ".join(status[iid]["reasons"]))
+            for cv in last.answer.caveats:
+                st.caption(f"Note: {cv}")
+            if last.answer.follow_ups:
+                st.caption("Follow-up questions")
+                fcols = st.columns(len(last.answer.follow_ups))
+                for c_, fu in zip(fcols, last.answer.follow_ups):
+                    if c_.button(fu, key=f"fu-{last.ask_id}-{fu}"):
+                        st.session_state["ask-q-next"] = fu
+                        st.rerun()
+        with st.expander("How this was answered"):
+            if last.routing:
+                st.write(f"Topic routing by `{last.routing.backend}` (escalated: {last.routing.escalated})")
+                st.dataframe(pd.DataFrame(sorted(last.routing.probs.items(), key=lambda kv: -kv[1]),
+                                          columns=["topic", "probability"]), hide_index=True)
+            if last.retrieved_chunks:
+                st.write("Knowledge-base chunks: " + ", ".join(f"`{c}`" for c in last.retrieved_chunks))
+            if last.cost:
+                st.write(f"{last.cost.input_tokens:,} input + {last.cost.output_tokens:,} output tokens"
+                         + (" (simulated: mock backend)" if last.cost.simulated else ""))
+            st.caption(f"ask id `{last.ask_id}`")
+
+    hist = askmod.history(20)
+    if not hist.empty:
+        st.subheader("Recent questions")
+        st.dataframe(hist[["ts", "question", "agents", "kind", "usd", "latency_ms", "grounded", "flags"]],
+                     hide_index=True)
+        pick_q = st.selectbox("Open a previous answer", hist.ask_id, format_func=lambda a: hist.set_index(
+            "ask_id").question[a][:90], key="ask-hist")
+        if st.button("Open", key="ask-open"):
+            st.session_state["ask-last"] = pick_q
+            st.rerun()
+
+# ------------------------------------------------------------------ insights
+with tabs[2]:
     for o in outs:
         st.subheader(o.agent.replace("_", " ").title())
         if o.status == "failed":
@@ -117,13 +215,17 @@ with tabs[1]:
                        f"{k_.latency_ms} ms{' (simulated)' if k_.simulated else ''} · compute {o.compute_ms} ms")
 
 # ------------------------------------------------------------------ human review
-with tabs[2]:
+with tabs[3]:
     st.write("Insights that are high-severity, low-confidence, flagged by the evaluator, or that OpenJev marks as "
              "changing comp/headcount/workload wait here. Approved ones are added to the RAG store.")
     reviewer = st.text_input("Reviewer name", value="hiring-manager")
-    for it in hitl.pending(run_id):
+    ask_items = [it for it in hitl.pending() if it.run_id.startswith("ask-")]
+    if ask_items:
+        st.caption(f"Includes {len(ask_items)} item(s) from **Ask** answers (agent shown as the question's topic).")
+    for it in hitl.pending(run_id) + ask_items:
         with st.container(border=True):
-            st.markdown(f"**{it.insight.title}** · `{it.agent}` · confidence {it.insight.confidence_score:.0%}")
+            src = " · from Ask" if it.run_id.startswith("ask-") else ""
+            st.markdown(f"**{it.insight.title}** · `{it.agent}`{src} · confidence {it.insight.confidence_score:.0%}")
             st.caption("Why review: " + "; ".join(it.reasons))
             text = st.text_area("Recommendation", it.insight.recommendation, key=f"t-{it.item_id}")
             note = st.text_input("Note", key=f"n-{it.item_id}")
@@ -139,7 +241,7 @@ with tabs[2]:
     st.dataframe(done, hide_index=True)
 
 # ------------------------------------------------------------------ candidates (demo lookup)
-with tabs[3]:
+with tabs[4]:
     st.write("Look up a candidate by name or ID to follow their journey. Names are for people using this "
              "dashboard only: agents, prompts, LangSmith traces and DeepEval uploads never see them.")
     from hiring_intel.ingest import load_all as _load
@@ -201,7 +303,7 @@ with tabs[3]:
                          + (f" · {o.decline_note}" if isinstance(o.get("decline_note"), str) else ""))
 
 # ------------------------------------------------------------------ evaluation
-with tabs[4]:
+with tabs[5]:
     if evals:
         ev = pd.DataFrame([{"agent": a, "overall": e["overall"], "grounded": e["numbers_grounded"],
                             "refs_valid": e["refs_valid"], "flags": ", ".join(e["flags"]),
@@ -215,7 +317,7 @@ with tabs[4]:
         st.dataframe(g, hide_index=True)
 
 # ------------------------------------------------------------------ cost & latency
-with tabs[5]:
+with tabs[6]:
     from hiring_intel.report import e2e_latency_ms
     lat = e2e_latency_ms(run_id)
     calls["agent"] = calls.agent.str.split(":").str[0]
@@ -237,7 +339,7 @@ with tabs[5]:
                      hide_index=True)
 
 # ------------------------------------------------------------------ compare inputs
-with tabs[6]:
+with tabs[7]:
     r = runs[~runs.variant.str.startswith("golden")].copy()
     order = {"small": 0, "medium": 1, "large": 2, "xlarge": 3}
     r = r[r["size"].isin(order)].assign(o=lambda x: x["size"].map(order)).sort_values("o")
@@ -252,5 +354,5 @@ with tabs[6]:
         st.dataframe(rr[["size", "variant", "n_candidates", "total_usd", "llm_calls", "input_tokens",
                          "e2e_latency_ms", "mean_eval", "hitl_pending"]], hide_index=True)
 
-with tabs[7]:
+with tabs[8]:
     st.dataframe(calls, hide_index=True)

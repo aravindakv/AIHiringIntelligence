@@ -35,7 +35,7 @@ Built for *Capstone 2: AI-Powered Hiring Intelligence System*.
 | RAG | Chroma + MiniLM (offline fallback: hashing embeddings), per-agent metadata filters |
 | LLMs | LiteLLM (OpenAI / Anthropic / Ollama) or an offline **mock** backend |
 | External validation | **LangSmith** (traces, hosted golden dataset, experiments) and **DeepEval** + Confident AI hub (regression suite; OpenJev as a $0 judge) — [docs/EXTERNAL_EVALUATION.md](docs/EXTERNAL_EVALUATION.md) |
-| UI | Streamlit: overview, insights, human review, evaluation, cost & latency, compare inputs |
+| UI | Streamlit: overview, **Ask** (HR's own questions, answered from the same data and checks: [docs/ASK.md](docs/ASK.md)), insights, human review, candidates, evaluation, cost & latency, compare inputs |
 | Deploy | Docker Compose on a Linux box ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)) |
 
 ## Quick start (offline, no API key, about 3 minutes)
@@ -73,6 +73,7 @@ ingest -> enrich (OpenJev labels free-text notes)
 | `hiring_intel/hitl.py` | Human-in-the-loop policy, queue, decisions, RAG write-back |
 | `hiring_intel/a2a.py` | A2A server + client (separate file, as required) |
 | `hiring_intel/graph.py` | LangGraph orchestrator |
+| `hiring_intel/ask.py` | Ask: HR's free-form questions → topic routing → grounded insights |
 | `hiring_intel/report.py` | Cost and latency accounting |
 | `app/dashboard.py` | Streamlit UI |
 | `services/openjev_server.py` | OpenJev as an HTTP service |
@@ -86,7 +87,7 @@ ingest -> enrich (OpenJev labels free-text notes)
 - [Architecture](docs/ARCHITECTURE.md) · [Output contract](docs/CONTRACTS.md) · [LangGraph flow, node by node](docs/GRAPH_FLOW.md) ([HTML](docs/graph_flow.html))
 - [Cost & latency definitions](docs/COST_AND_LATENCY.md) · [Optimization report](docs/OPTIMIZATION_REPORT.md)
 - [Evaluation](docs/EVALUATION.md) · [External evaluation: LangSmith, DeepEval](docs/EXTERNAL_EVALUATION.md) · [Human in the loop](docs/HUMAN_IN_THE_LOOP.md)
-- [OpenJev](docs/OPENJEV.md) · [A2A](docs/A2A.md)
+- [Ask: HR questions in the dashboard](docs/ASK.md) · [OpenJev](docs/OPENJEV.md) · [A2A](docs/A2A.md)
 - [Deployment (Docker on Linux)](docs/DEPLOYMENT.md)
 - [Learning path](docs/LEARNING_PATH.md) · [Improvement points](docs/IMPROVEMENTS.md)
 - [Reflection](docs/REFLECTION.md) · [Demo script](docs/DEMO_SCRIPT.md)
@@ -130,6 +131,24 @@ flowchart TD
 
 With `transport="a2a"` the five insight agents run behind the A2A server instead of in-process; nothing else in the graph changes.
 
+## Ask: a second entry point
+
+HR can also ask their own question in the dashboard's **Ask** tab. This path runs outside the graph, on demand, but reuses its parts:
+
+```mermaid
+flowchart LR
+    Q[HR question] --> PG{person guard}
+    PG -- names a person --> CT[Candidates tab]
+    PG --> TR{{OpenJev topic routing}}
+    TR -- out of scope --> X[explain what Ask covers]
+    TR -- 1-2 topics --> CX[agent feature tables + SIGNALS + RAG]
+    CX --> RT{{Routing Agent}} --> L[one LLM call: AskAnswer]
+    L --> G[guard + calibrate + grounding check]
+    G --> HR[human review policy] --> UI[Ask tab]
+```
+
+Details: [ASK.md](ASK.md).
+
 ## Components
 
 | Component | File | Job | Model |
@@ -146,6 +165,7 @@ With `transport="a2a"` the five insight agents run behind the A2A server instead
 | Optimization Agent | `agents/optimizer.py` | Cheaper/faster suggestions from run stats | small LLM |
 | HITL | `hitl.py` | Review policy, queue, decisions, RAG write-back | OpenJev for sensitivity |
 | A2A | `a2a.py` | Expose agents as A2A services; client used by the graph | none |
+| Ask | `ask.py` | Answer HR's free-form questions from the agents' data, with the same guard-rails | OpenJev for topic, routed LLM for the answer |
 
 ## State and checkpointing
 
@@ -254,6 +274,8 @@ Its evaluation: `numbers_grounded 1.0`, `refs_valid true`, judge 4/5/1, overall 
 3. **Judge**: rubric of actionability, grounding, hallucination risk (1–5). Real mode: an LLM judge (`config/models.yaml → judge`). Mock mode: a heuristic judge + OpenJev "is this actionable?", labelled `heuristic+openjev` in results.
 
 `overall = 0.35 × grounded + 0.15 × refs_valid + 0.5 × judge`, **capped at 0.55 when any number is ungrounded**. Below 0.6 → one retry on the large model.
+
+Ask answers ([ASK.md](ASK.md)) get layers 1 and 2 plus the severity cap; they skip the judge to keep a question cheap. The grounding score is shown with every answer, and a score under 0.8 adds an `ungrounded_numbers` flag and a warning.
 
 ## Golden set
 
@@ -477,6 +499,8 @@ Configured in `config/sla.yaml → hitl`. An insight goes to the review queue if
 
 Everything else is `auto_published`.
 
+The same policy applies to insights in answers from the **Ask** tab ([ASK.md](ASK.md)). Their pending items appear in the Human review tab marked "from Ask", under the question's topic agent, and an approved one is written back to RAG like any other.
+
 ## Three modes
 
 | Mode | Behaviour | Use |
@@ -620,6 +644,7 @@ text = model.config.nli_template.format(premise="...", hypothesis="...")
 | 4:00 | Evaluation tab | Grounding 1.0, refs valid, judge scores; golden set 18/18 medium/large, 15/18 small and why |
 | 5:00 | Sidebar: fault "fabricate numbers" → Run | Evaluator flags ungrounded numbers, retries on large, score recovers |
 | 5:45 | Human review tab | Why each item is here; approve one, edit one, reject one; approved text becomes `past_insight` |
+| 6:15 | Ask tab: "Why are candidates declining our offers?" on `comp_crunch_medium`, then "Why was C0000010 rejected?" | HR asks in plain English; OpenJev routes the question to the Offers data; one LLM call; grounded 100%; the comp insight is held for review. A question about one person is sent to Candidates with no model call |
 | 6:45 | Cost & latency tab | USD per agent and tier, critical-path latency by stage, OpenJev decisions |
 | 7:30 | Compare inputs tab | Cost grows with input size when an LLM labels notes; flat with OpenJev; the four levers |
 | 8:15 | Terminal: `--transport a2a` + curl of an Agent Card | Agents as independent A2A services |

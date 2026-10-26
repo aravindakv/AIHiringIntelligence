@@ -11,6 +11,8 @@ Ordered by impact on trust first, then cost, then operations. Each item says wha
 5. **Causal claims.** "JD problem vs interview problem" is inferred from patterns, not tested. *Next:* track interventions (JD rewritten on date X) and compare before/after; store results as `past_insight`.
 6. **Real OpenJev accuracy.** Fallback accuracy (0.92) is on templated notes. *Next:* label 200 real notes, measure the model, tune `min_confidence`, report escalation rate.
 
+7a. **Ask: measure topic routing.** *Next:* label 30 real HR questions with their topic, measure OpenJev vs the keyword fallback, tune the hypotheses, and add the set to CI. Then add multi-turn context (the previous answer) and a semantic cache for repeated questions.
+
 ## Human in the loop
 
 7. **Review fatigue.** 7 of 8 insights went to review on the large baseline input. *Next:* per-agent rules (Pipeline aging reqs → auto), auto-approve insights matching a previously approved one, group the queue by owner, and add an SLA for reviews.

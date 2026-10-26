@@ -40,6 +40,15 @@
 | A2A `Connection refused` | server not running | `uvicorn hiring_intel.a2a:server --port 8100` and set `A2A_BASE_URL` |
 | A2A agents `degraded` | concurrent first use of Chroma | already guarded with a lock; restart the A2A server after rebuilding the index |
 
+## Ask tab
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| a sensible question comes back "out of scope" | the keyword fallback missed the phrasing | use a word from the topic (offer, reject, interviewer, sourcing, SLA), or run real OpenJev, which handles paraphrase better |
+| the first Ask on a dataset takes minutes | `enrich` labels the notes on first use; real OpenJev on a CPU is slow | expected once per process; use `OPENJEV_BACKEND=fallback` for demos |
+| the answer has a red "Evaluator flags" box | the model wrote a number not in the tables | trust the insight cards' evidence, not the prose; report the question so the prompt can be tightened |
+| "This looks like a question about one person" for a group question | the question contains a full name or an ID-shaped token (`C1234`) | rephrase without the name or ID |
+
 ## External evaluation
 
 | Symptom | Cause | Fix |

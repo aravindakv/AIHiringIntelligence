@@ -786,7 +786,11 @@ E2E latency = ingest + enrich + **max(agents)** + evaluate + max(retry) + review
 
 ---
 
-## 6. Try it
+## 6. Outside the graph: the Ask path
+
+The dashboard's **Ask** tab doesn't run this graph. `hiring_intel/ask.py` answers one HR question on demand, using the same building blocks: the agents' `features()` and `analyze()`, `retrieve()`, the Routing Agent, `call_structured`, `guard()`, `grounding_check()` and `hitl.review_reasons()`. It writes to the same SQLite tables under an `ask_id`, plus its own `questions` table. Flow and contract: [ASK.md](ASK.md).
+
+## 7. Try it
 
 ```bash
 # watch each node's update as it happens
@@ -874,7 +878,7 @@ figure.diagram pre.mermaid { background: none; border: 0; margin: 0; padding: 0;
 <nav>
   <div class="brand">hiring-intel</div>
   <div class="sub">LangGraph orchestrator, <code>graph.py</code></div>
-  <a class="l2" href="#1-the-graph-at-a-glance">1. The graph at a glance</a><a class="l2" href="#2-the-state-runstate">2. The state: RunState</a><a class="l3" href="#state-size-after-each-step-run-a-json-bytes">State size after each step (run A, JSON bytes)</a><a class="l2" href="#3-node-by-node">3. Node by node</a><a class="l3" href="#30-run-building-the-initial-state">3.0 run(): building the initial state</a><a class="l3" href="#31-ingest">3.1 ingest</a><a class="l3" href="#32-enrich">3.2 enrich</a><a class="l3" href="#33-the-five-agent-nodes-make_agent_nodename">3.3 The five agent nodes (make_agent_node(name))</a><a class="l3" href="#34-evaluate">3.4 evaluate</a><a class="l3" href="#35-needs_retry-conditional-edge-not-a-node">3.5 needs_retry (conditional edge, not a node)</a><a class="l3" href="#36-retry">3.6 retry</a><a class="l3" href="#37-human_review">3.7 human_review</a><a class="l3" href="#38-optimize">3.8 optimize</a><a class="l3" href="#39-persist">3.9 persist</a><a class="l2" href="#4-supersteps-and-latency">4. Supersteps and latency</a><a class="l2" href="#5-where-data-lives">5. Where data lives</a><a class="l2" href="#6-try-it">6. Try it</a>
+  <a class="l2" href="#1-the-graph-at-a-glance">1. The graph at a glance</a><a class="l2" href="#2-the-state-runstate">2. The state: RunState</a><a class="l3" href="#state-size-after-each-step-run-a-json-bytes">State size after each step (run A, JSON bytes)</a><a class="l2" href="#3-node-by-node">3. Node by node</a><a class="l3" href="#30-run-building-the-initial-state">3.0 run(): building the initial state</a><a class="l3" href="#31-ingest">3.1 ingest</a><a class="l3" href="#32-enrich">3.2 enrich</a><a class="l3" href="#33-the-five-agent-nodes-make_agent_nodename">3.3 The five agent nodes (make_agent_node(name))</a><a class="l3" href="#34-evaluate">3.4 evaluate</a><a class="l3" href="#35-needs_retry-conditional-edge-not-a-node">3.5 needs_retry (conditional edge, not a node)</a><a class="l3" href="#36-retry">3.6 retry</a><a class="l3" href="#37-human_review">3.7 human_review</a><a class="l3" href="#38-optimize">3.8 optimize</a><a class="l3" href="#39-persist">3.9 persist</a><a class="l2" href="#4-supersteps-and-latency">4. Supersteps and latency</a><a class="l2" href="#5-where-data-lives">5. Where data lives</a><a class="l2" href="#6-outside-the-graph-the-ask-path">6. Outside the graph: the Ask path</a><a class="l2" href="#7-try-it">7. Try it</a>
   <button class="theme-btn" id="theme">Toggle theme</button>
 </nav>
 <main>
@@ -1765,7 +1769,9 @@ return &quot;retry&quot; if low else &quot;human_review&quot;
 </tbody>
 </table></div>
 <hr />
-<h2 id="6-try-it">6. Try it</h2>
+<h2 id="6-outside-the-graph-the-ask-path">6. Outside the graph: the Ask path</h2>
+<p>The dashboard's <strong>Ask</strong> tab doesn't run this graph. <code>hiring_intel/ask.py</code> answers one HR question on demand, using the same building blocks: the agents' <code>features()</code> and <code>analyze()</code>, <code>retrieve()</code>, the Routing Agent, <code>call_structured</code>, <code>guard()</code>, <code>grounding_check()</code> and <code>hitl.review_reasons()</code>. It writes to the same SQLite tables under an <code>ask_id</code>, plus its own <code>questions</code> table. Flow and contract: <a href="ASK.md">ASK.md</a>.</p>
+<h2 id="7-try-it">7. Try it</h2>
 <pre><code class="language-bash"># watch each node's update as it happens
 LLM_BACKEND=mock OPENJEV_BACKEND=fallback python - &lt;&lt;'EOF'
 import json, time
@@ -1829,7 +1835,7 @@ EOF
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-run optimized-1026084136-a9dd done; errors: []
+run optimized-1026142658-3a03 done; errors: []
   offers      [high  ] Offers below 90% of expected CTC are being declined
   panel_load  [high  ] 10 interviewers over load policy
   pipeline    [medium] SRE onsite breaches SLA
@@ -1841,7 +1847,7 @@ run optimized-1026084136-a9dd done; errors: []
 retried: ['offers', 'sourcing'] | errors: ['offers: RuntimeError: injected crash']
 scores after retry: {'offers': 0.97, 'panel_load': 0.97, 'pipeline': 0.97, 'rejection': 0.97, 'sourcing': 0.97}
 optimizer: ['Trial the small model for rejection', 'Compress rejection context', 'Trial the small model for sourcing']
-E2E by stage (ms): {'ingest': 85, 'enrich': 62, 'evaluate': 223, 'human_review': 28, 'optimize': 4137, 'agents': 15369, 'retry': 12678}
+E2E by stage (ms): {'ingest': 74, 'enrich': 71, 'evaluate': 257, 'human_review': 22, 'optimize': 4136, 'agents': 15691, 'retry': 12670}
 ```
 
 Interactive review in the terminal:

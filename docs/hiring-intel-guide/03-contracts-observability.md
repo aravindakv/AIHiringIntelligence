@@ -153,6 +153,8 @@ CREATE TABLE IF NOT EXISTS timings(run_id TEXT, stage TEXT, agent TEXT, compute_
 CREATE TABLE IF NOT EXISTS agent_outputs(run_id TEXT, agent TEXT, status TEXT, json TEXT);
 CREATE TABLE IF NOT EXISTS routing(run_id TEXT, agent TEXT, tier TEXT, model TEXT, reason TEXT, decided_by TEXT);
 CREATE TABLE IF NOT EXISTS eval_results(run_id TEXT, agent TEXT, overall REAL, json TEXT);
+CREATE TABLE IF NOT EXISTS questions(ts TEXT, ask_id TEXT PRIMARY KEY, data_path TEXT, question TEXT,
+    agents TEXT, kind TEXT, usd REAL, latency_ms INT, grounded REAL, flags TEXT, json TEXT);
 CREATE TABLE IF NOT EXISTS review_queue(item_id TEXT PRIMARY KEY, run_id TEXT, agent TEXT, status TEXT,
     reviewer TEXT, note TEXT, reasons TEXT, json TEXT, ts TEXT);
 """
@@ -233,7 +235,7 @@ Expected output (captured on a fresh extract, mock backend):
 ```text
 valid insight: 0.7
 rejected: Value error, recommendation is generic; name an owner, action or number
-['agent_outputs', 'decisions', 'eval_results', 'llm_calls', 'review_queue', 'routing', 'runs', 'timings']
+['agent_outputs', 'decisions', 'eval_results', 'llm_calls', 'questions', 'review_queue', 'routing', 'runs', 'timings']
 ```
 
 ## Checkpoint

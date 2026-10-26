@@ -235,11 +235,16 @@ Simulated latency parameters (from `config/models.yaml`):
 | small | 350 ms | 9 ms | 40 ms |
 | large | 700 ms | 22 ms | 90 ms |
 
+## Ask (per question)
+
+An Ask question is one OpenJev topic decision plus one LLM call: about $0.0004–0.001 on the small tier and $0.007–0.012 on the large tier at the example prices, with 1.3–1.9k input tokens. Questions about a person, out of scope or invalid cost $0 (no model call). Each question logs a `questions` row with USD and latency; its LLM call is in `llm_calls` under the `ask_id`. See [ASK.md](ASK.md).
+
 ## Where to see them
 
 - Dashboard → **Cost & latency**: USD per agent and tier, critical-path latency by stage, routing decisions, OpenJev decisions.
 - Dashboard → **Compare inputs**: run cost and E2E latency per input size and variant.
-- `data/runs.db` tables: `llm_calls`, `timings`, `decisions`, `routing`, `runs`.
+- Dashboard → **Ask**: cost, latency and grounding per question; "Recent questions" history.
+- `data/runs.db` tables: `llm_calls`, `timings`, `decisions`, `routing`, `runs`, `questions`.
 - `docs/OPTIMIZATION_REPORT.md` for the before/after numbers.
 ````
 

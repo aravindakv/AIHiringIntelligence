@@ -9,6 +9,7 @@
 | 4:00 | Evaluation tab | Grounding 1.0, refs valid, judge scores; golden set 18/18 medium/large, 15/18 small and why |
 | 5:00 | Sidebar: fault "fabricate numbers" → Run | Evaluator flags ungrounded numbers, retries on large, score recovers |
 | 5:45 | Human review tab | Why each item is here; approve one, edit one, reject one; approved text becomes `past_insight` |
+| 6:15 | Ask tab: "Why are candidates declining our offers?" on `comp_crunch_medium`, then "Why was C0000010 rejected?" | HR asks in plain English; OpenJev routes the question to the Offers data; one LLM call; grounded 100%; the comp insight is held for review. A question about one person is sent to Candidates with no model call |
 | 6:45 | Cost & latency tab | USD per agent and tier, critical-path latency by stage, OpenJev decisions |
 | 7:30 | Compare inputs tab | Cost grows with input size when an LLM labels notes; flat with OpenJev; the four levers |
 | 8:15 | Terminal: `--transport a2a` + curl of an Agent Card | Agents as independent A2A services |
