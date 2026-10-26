@@ -36,7 +36,63 @@ ROOT = Path(__file__).resolve().parent.parent
 CFG = yaml.safe_load((ROOT / "config/models.yaml").read_text())
 TIER_OF = {t["model"]: name for name, t in CFG["tiers"].items()}
 _cache: dict[str, tuple[BaseModel, Cost]] = {}
+_unavailable: str | None = None          # circuit breaker: set on the first permanent provider error
 
+
+class LLMUnavailable(RuntimeError):
+    """The provider refuses every call (quota or spend limit reached, bad key, no access to the model).
+    Retrying can't help, so the run stops instead of failing the same way on every remaining call."""
+
+
+PERMANENT_MARKERS = ("insufficient_quota", "spend limit", "spend_limit", "exceeded your current quota",
+                     "billing", "invalid api key", "incorrect api key", "invalid_api_key")
+
+
+def _is_permanent(e: Exception) -> bool:
+    import litellm
+    if isinstance(e, (litellm.AuthenticationError, litellm.PermissionDeniedError, litellm.NotFoundError,
+                      litellm.BudgetExceededError)):
+        return True
+    return any(m in str(e).lower() for m in PERMANENT_MARKERS)
+
+
+def _is_transient(e: Exception) -> bool:
+    import litellm
+    return isinstance(e, (litellm.RateLimitError, litellm.Timeout, litellm.APIConnectionError,
+                          litellm.InternalServerError, litellm.ServiceUnavailableError))
+
+
+def completion(**kw):
+    """litellm.completion with our own retry policy: up to 2 retries with backoff for transient errors
+    (rate limit per minute, timeout, 5xx); none for permanent ones, which trip the circuit breaker."""
+    global _unavailable
+    import litellm
+    if _unavailable:
+        raise LLMUnavailable(_unavailable)
+    for attempt in range(3):
+        try:
+            return litellm.completion(num_retries=0, **kw)
+        except Exception as e:
+            if _is_permanent(e):
+                _unavailable = (f"{kw.get('model')}: {type(e).__name__}: {str(e)[:300]}. Fix the provider account "
+                                "(quota, spend limit or key), or run offline with LLM_BACKEND=mock.")
+                raise LLMUnavailable(_unavailable) from e
+            if not _is_transient(e) or attempt == 2:
+                raise
+            time.sleep(2 ** attempt * 2)
+
+
+def reset_unavailable() -> None:
+    global _unavailable
+    _unavailable = None
+
+
+def preflight() -> None:
+    """One tiny call before an expensive job: fails in about a second if the account can't serve it."""
+    if backend() == "mock":
+        return
+    completion(model=model_for("small"), messages=[{"role": "user", "content": "Reply with: ok"}], max_tokens=3,
+               timeout=30)
 
 def backend() -> str:
     return os.getenv("LLM_BACKEND", "mock")
@@ -100,13 +156,12 @@ def call_structured(*, agent: str, run_id: str, model: str, system: str, user: s
                     usd=round(price_usd(model, inp, out), 6),
                     latency_ms=simulated_latency_ms(model, inp, out, key), simulated=True)
     else:
-        import litellm
         messages = [{"role": "system", "content": full_system}, {"role": "user", "content": user}]
         inp = out = 0
         t0 = time.perf_counter()
         for attempt in range(max_repairs + 1):
-            resp = litellm.completion(model=model, messages=messages, temperature=temperature,
-                                      response_format={"type": "json_object"}, num_retries=2, timeout=90)
+            resp = completion(model=model, messages=messages, temperature=temperature,
+                              response_format={"type": "json_object"}, timeout=90)
             inp += resp.usage.prompt_tokens
             out += resp.usage.completion_tokens
             raw = resp.choices[0].message.content

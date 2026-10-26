@@ -21,6 +21,7 @@ Backends (config/models.yaml -> openjev.backend, or env OPENJEV_BACKEND):
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -33,6 +34,7 @@ from hiring_intel.contracts import Decision
 from hiring_intel.llm import ROOT
 
 CFG = yaml.safe_load((ROOT / "config/models.yaml").read_text())["openjev"]
+log = logging.getLogger("hiring_intel.openjev")
 MIN_CONF = float(CFG.get("min_confidence", 0.55))              # yes / no
 MIN_CONF_MULTI = float(CFG.get("min_confidence_multi", 0.30))  # 3+ options: probability is spread wider
 
@@ -89,17 +91,36 @@ def _check_subfolder(repo: str, subfolder: str) -> None:
         raise ValueError(f"OpenJev checkpoint '{subfolder}' is not in {repo}. Available: {have}. "
                          "Set openjev.subfolder in config/models.yaml or env OPENJEV_SUBFOLDER.")
 
+class OpenJevUnavailable(RuntimeError):
+    """The OpenJev service can't be reached."""
+
+
+START_HINT = "start it with `uvicorn services.openjev_server:app --port 8200`, or unset OPENJEV_URL"
+
 
 class HttpOpenJev:
     name = "openjev-http"
 
     def __init__(self, url: str):
         import httpx
-        # CPU inference can take 10-20s per call on a busy machine; override with OPENJEV_TIMEOUT
-        self.client = httpx.Client(base_url=url, timeout=float(os.getenv("OPENJEV_TIMEOUT", "300")))
+        self.url = url
+        self.client = httpx.Client(base_url=url, timeout=300)   # one CPU decision can take 10-40 s
+
+    def health(self) -> str | None:
+        """None if the service answers /health, else the reason it doesn't."""
+        try:
+            r = self.client.get("/health", timeout=5)
+            r.raise_for_status()
+            return None
+        except Exception as e:
+            return f"{type(e).__name__}: {e}"
 
     def entail(self, premise: str, hypotheses: list[str]) -> list[float]:
-        r = self.client.post("/entail", json={"premise": premise, "hypotheses": hypotheses})
+        import httpx
+        try:
+            r = self.client.post("/entail", json={"premise": premise, "hypotheses": hypotheses})
+        except httpx.TransportError as e:                 # the service went away mid-run
+            raise OpenJevUnavailable(f"OpenJev service at {self.url} stopped answering ({e}); {START_HINT}") from e
         r.raise_for_status()
         return r.json()["entailment"]
 
@@ -122,7 +143,17 @@ def get_backend():
     mode = os.getenv("OPENJEV_BACKEND", CFG.get("backend", "auto"))
     url = os.getenv("OPENJEV_URL")
     if mode in ("http", "auto") and url:
-        return HttpOpenJev(url)
+        http = HttpOpenJev(url)
+        why = http.health()                              # checked once per process (lru_cache)
+        if why is None:
+            return http
+        msg = f"OpenJev service at {url} is not reachable ({why}); {START_HINT}"
+        if mode == "http":
+            raise OpenJevUnavailable(msg)
+        # auto: don't load the 0.8B model in-process by surprise; use the keyword fallback, which every
+        # Decision records as backend="keyword-fallback"
+        log.warning("%s. Using the keyword fallback for this process.", msg)
+        return KeywordFallback()
     if mode in ("local", "auto"):
         try:
             return LocalOpenJev(CFG["repo"], os.getenv("OPENJEV_SUBFOLDER", CFG["subfolder"]))

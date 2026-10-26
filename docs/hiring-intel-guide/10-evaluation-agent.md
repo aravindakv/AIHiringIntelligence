@@ -38,7 +38,7 @@ import re
 from pydantic import BaseModel, Field
 
 from hiring_intel.contracts import AgentOutput
-from hiring_intel.llm import CFG, backend, call_structured
+from hiring_intel.llm import CFG, LLMUnavailable, backend, call_structured
 from hiring_intel.metrics import to_text
 from hiring_intel.observability import log_decision
 from hiring_intel.openjev import decider
@@ -137,6 +137,8 @@ def evaluate_one(agent, out: AgentOutput, data, run_id: str, compress: bool = Fa
     grounded, refs_ok = grounding_check(out, ftxt)
     try:
         j = judge(out, ftxt, grounded, run_id)
+    except LLMUnavailable:
+        raise
     except Exception:
         j = None
     overall, flags = combine(grounded, refs_ok, j)

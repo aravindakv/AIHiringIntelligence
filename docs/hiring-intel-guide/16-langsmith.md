@@ -85,9 +85,24 @@ def push_golden_dataset(name: str = DATASET):
 
 
 # ---------------------------------------------------------------- target
-@lru_cache(maxsize=64)
+_failed: dict[tuple, Exception] = {}
+
+
 def _pipeline(scenario: str, size: str, variant: str) -> str:
-    """One pipeline run per scenario (cases share it). Returns the state as JSON."""
+    """One pipeline run per scenario, shared by its cases. A failure is remembered too, so the other
+    cases of that scenario report the same error instead of re-running (and re-paying for) the pipeline."""
+    key = (scenario, size, variant)
+    if key in _failed:
+        raise _failed[key]
+    try:
+        return _pipeline_ok(scenario, size, variant)
+    except Exception as e:
+        _failed[key] = e
+        raise
+
+
+@lru_cache(maxsize=64)
+def _pipeline_ok(scenario: str, size: str, variant: str) -> str:
     from hiring_intel.graph import run
     from scripts.benchmark import VARIANTS
     kw = {k: v for k, v in VARIANTS[variant].items() if k != "repeat"}
@@ -154,6 +169,36 @@ def pass_rate(outputs: list[dict], reference_outputs: list[dict]) -> dict:
 EVALUATORS = [golden_check, grounding, eval_agent_score, cost_usd, latency_s]
 
 
+# ---------------------------------------------------------------- before spending money
+def estimate_usd(size: str, variant: str) -> float | None:
+    """Expected LLM spend for one experiment: one pipeline run per scenario in the golden set, priced from
+    the last benchmark (config prices, mock token estimates; real token counts usually run higher)."""
+    import pandas as pd
+    f = ROOT / "data/eval/benchmark.csv"
+    if not f.exists():
+        return None
+    b = pd.read_csv(f)
+    b = b[(b.variant == variant) & (b["size"] == size)]
+    scen = {c["scenario"] for c in _cases()}
+    per = b[b.scenario.isin(scen)].groupby("scenario").total_usd.mean()
+    return round(float(per.sum()), 4) if len(per) == len(scen) else None
+
+
+def preflight(size: str, variant: str, max_usd: float | None = None) -> float | None:
+    """Fail in about a second, before an experiment exists, if the provider can't serve the run or the
+    estimate is over budget."""
+    from hiring_intel.llm import backend, preflight as llm_preflight
+    from hiring_intel.openjev import get_backend
+    get_backend()                       # OPENJEV_BACKEND=http with the service down fails here, not mid-run
+    est = estimate_usd(size, variant)
+    if backend() != "mock":
+        if max_usd is not None and est is not None and est > max_usd:
+            raise SystemExit(f"estimated spend ${est} for {variant}/{size} is over --max-usd {max_usd}; "
+                             "raise the limit or pick a cheaper variant/size")
+        llm_preflight()
+    return est
+
+
 # ---------------------------------------------------------------- run
 def run_offline(size: str = "medium", variant: str = "optimized") -> list[dict]:
     """Same target and evaluators as the LangSmith experiment, run locally with no LangSmith client,
@@ -161,7 +206,11 @@ def run_offline(size: str = "medium", variant: str = "optimized") -> list[dict]:
     target = make_target(size, variant)
     rows = []
     for c in _cases():
-        out = target({"case_id": c["id"], "scenario": c["scenario"], "agent": c["agent"]})
+        try:
+            out = target({"case_id": c["id"], "scenario": c["scenario"], "agent": c["agent"]})
+        except Exception as e:                       # report it as an error, not as a failed case
+            rows.append({"case_id": c["id"], "error": f"{type(e).__name__}: {str(e)[:200]}"})
+            continue
         ref = {"expect": c["expect"]}
         scores = {r["key"]: r for r in (golden_check(out, ref), grounding(out), eval_agent_score(out),
                                         cost_usd(out), latency_s(out))}
@@ -170,8 +219,9 @@ def run_offline(size: str = "medium", variant: str = "optimized") -> list[dict]:
     return rows
 
 
-def run_experiment(size: str = "medium", variant: str = "optimized"):
+def run_experiment(size: str = "medium", variant: str = "optimized", max_usd: float | None = None):
     """Upload the dataset (once) and record one experiment in LangSmith."""
+    preflight(size, variant, max_usd)
     from langsmith import evaluate
     return evaluate(make_target(size, variant), data=push_golden_dataset().name, evaluators=EVALUATORS,
                     summary_evaluators=[pass_rate], experiment_prefix=f"{variant}-{size}",
@@ -185,7 +235,9 @@ def run_experiment(size: str = "medium", variant: str = "optimized"):
 ```python
 """Run the golden set as a LangSmith experiment.
 
-    # online: needs LANGSMITH_API_KEY; creates dataset 'hiring-intel-golden' once, one experiment per call
+    # online: needs LANGSMITH_API_KEY; creates dataset 'hiring-intel-golden' once, one experiment per call.
+    # Real LLM calls cost money: prints an estimate, refuses above --max-usd (default 1.0), and checks the
+    # provider with one tiny call before creating the experiment.
     python scripts/langsmith_eval.py --variant optimized --size medium
     python scripts/langsmith_eval.py --variant all_large --size medium     # then compare both in the UI
 
@@ -199,26 +251,50 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from hiring_intel.evals.langsmith_eval import run_experiment, run_offline  # noqa: E402
+from hiring_intel.evals.langsmith_eval import estimate_usd, run_experiment, run_offline  # noqa: E402
+from hiring_intel.llm import LLMUnavailable, backend  # noqa: E402
+from hiring_intel.openjev import OpenJevUnavailable  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--size", default="medium")
 ap.add_argument("--variant", default="optimized")
 ap.add_argument("--offline", action="store_true")
+ap.add_argument("--max-usd", type=float, default=1.0, help="refuse to start if the estimated spend is higher")
 a = ap.parse_args()
+
+est = estimate_usd(a.size, a.variant)
+print(f"estimated LLM spend: {'$' + str(est) if est is not None else 'unknown (run scripts/benchmark.py)'} "
+      f"for {a.variant}/{a.size} ({'mock: $0 actually spent' if backend() == 'mock' else 'real calls'})")
 
 if a.offline:
     rows = run_offline(a.size, a.variant)
 else:
-    res = run_experiment(a.size, a.variant)
-    rows = [{"case_id": r["example"].inputs["case_id"],
-             **{e.key: e.score for e in r["evaluation_results"]["results"]}} for r in res]
+    try:
+        res = run_experiment(a.size, a.variant, max_usd=a.max_usd)
+    except (LLMUnavailable, OpenJevUnavailable) as e:     # setup problem: say so in one line, create nothing
+        sys.exit(f"cannot start the experiment: {e}")
+    rows = []
+    for r in res:
+        row = {"case_id": r["example"].inputs["case_id"]}
+        if getattr(r["run"], "error", None):
+            row["error"] = str(r["run"].error).strip().splitlines()[-1][:200]
+        else:
+            row.update({e.key: e.score for e in r["evaluation_results"]["results"]})
+        rows.append(row)
     print("experiment:", getattr(res, "experiment_name", "see the LangSmith UI"))
 
 print(f"{'case':10} {'pass':>4} {'grounded':>8} {'eval':>5}")
 for r in rows:
-    print(f"{r['case_id']:10} {r.get('golden_pass'):>4} {r.get('numbers_grounded'):>8} {r.get('eval_agent_overall'):>5}")
-print(f"\ngolden pass rate: {sum(1 for r in rows if r.get('golden_pass'))}/{len(rows)}")
+    if "error" in r:
+        print(f"{r['case_id']:10} {'ERR':>4} {'-':>8} {'-':>5}")
+    else:
+        print(f"{r['case_id']:10} {r.get('golden_pass'):>4} {r.get('numbers_grounded'):>8} {r.get('eval_agent_overall'):>5}")
+scored = [r for r in rows if "error" not in r]
+errs = [r for r in rows if "error" in r]
+print(f"\ngolden pass rate: {sum(1 for r in scored if r.get('golden_pass'))}/{len(scored)} scored")
+if errs:
+    print(f"{len(errs)} case(s) errored and were not scored. First error: {errs[0]['error']}")
+    sys.exit(1)
 ```
 
 ## Step 16.4 — Run experiments and compare
@@ -227,6 +303,8 @@ print(f"\ngolden pass rate: {sum(1 for r in rows if r.get('golden_pass'))}/{len(
 python scripts/langsmith_eval.py --variant all_large --size medium
 python scripts/langsmith_eval.py --variant optimized --size medium
 ```
+
+**These make real LLM calls and cost real money.** The script prints an estimate first: about $0.38 for `all_large` and $0.07 for `optimized` on `medium` inputs, at the prices in `config/models.yaml`. Real token counts usually run higher. It refuses to start above `--max-usd` (default 1.0). It also makes one tiny call first, so an exhausted quota, a spend limit or a bad key stops it in about a second, before an experiment is created. If the provider refuses a call mid-run, the run stops (`LLMUnavailable`) and is not retried. Errored cases print as `ERR` and are left out of the pass rate: a run that never reached the model is not a 0/18.
 
 In LangSmith: **Datasets & Experiments → hiring-intel-golden → Experiments**, tick both, **Compare**. Each row is a case; the columns are the evaluator scores per experiment. Open any cell to jump to its trace. This view is your before/after evidence for the optimization report.
 
@@ -245,8 +323,8 @@ i-pip         1      1.0  0.97
 s-src         1      1.0  0.97
 s-rej         1      1.0  0.97
 s-pan         1      1.0  0.97
-golden pass rate: 18/18
-golden pass rate: 15/18
+golden pass rate: 18/18 scored
+golden pass rate: 15/18 scored
 ```
 
 ## Checkpoint

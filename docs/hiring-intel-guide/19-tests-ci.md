@@ -16,6 +16,7 @@
   - LLM note labels land on the right rows even when the model skips or reorders;
   - a real model can't raise alarms on a healthy pipeline;
   - the RAG index rebuilds when the embedding model changes, keeping approved insights;
+  - a spend-limit error stops the run after one call, while a per-minute rate limit is retried;
   - no name from the dataset appears in any prompt.
 - **CI tiers:**
   - every push: unit tests + golden set offline (must stay 18/18 on medium) + DeepEval offline;
@@ -123,6 +124,24 @@ def test_hypotheses_floor_and_abstain():
     assert d2.choice == "unclear" and d2.escalated          # abstaining always escalates
     d3 = OpenJevDecider(_Fixed([0.48, 0.52])).yes_no("t", "note", "q?")
     assert d3.escalated                                     # yes / no keeps the 0.55 floor
+
+
+def test_service_down_is_caught_at_start(monkeypatch):
+    """OPENJEV_URL set but the service not running: the run used to crash at human review with
+    'Connection refused'. auto now falls back to keywords with a warning; http fails at once, clearly."""
+    import pytest
+    from hiring_intel import openjev
+    monkeypatch.setenv("OPENJEV_URL", "http://127.0.0.1:9")          # nothing listens here
+    try:
+        monkeypatch.setenv("OPENJEV_BACKEND", "auto")
+        openjev.get_backend.cache_clear()
+        assert isinstance(openjev.get_backend(), KeywordFallback)
+        monkeypatch.setenv("OPENJEV_BACKEND", "http")
+        openjev.get_backend.cache_clear()
+        with pytest.raises(openjev.OpenJevUnavailable, match="not reachable"):
+            openjev.get_backend()
+    finally:
+        openjev.get_backend.cache_clear()
 ```
 
 **File:** `tests/test_graph.py`
@@ -311,6 +330,60 @@ def test_index_rebuilds_when_embeddings_change(tmp_path, monkeypatch):
     R._collection.cache_clear(); R.retrieve.cache_clear()
 ```
 
+The last one came from a LangSmith experiment that hit OpenAI's spend limit. LiteLLM retried the permanent error, all 18 cases re-ran the pipeline, and the report said 0/18 as if quality were zero.
+
+**File:** `tests/test_llm_errors.py`
+```python
+import litellm
+import pytest
+
+from hiring_intel import llm
+from hiring_intel.agents.insight_agents import AGENTS
+from hiring_intel.ingest import load_all
+
+QUOTA = ("Your project has reached its configured enforced spend limit. "
+         "{'error': {'type': 'insufficient_quota', 'code': 'project_spend_limit_exceeded'}}")
+
+
+def test_spend_limit_stops_the_run_at_once(monkeypatch):
+    """A real run hit OpenAI's spend limit: LiteLLM retried a permanent error, every golden case re-ran
+    the pipeline, and the report said 0/18 as if quality were zero. Now the first refusal trips a
+    breaker, the agent re-raises instead of reporting 'failed', and later calls never reach the network."""
+    calls = []
+
+    def refuse(**kw):
+        calls.append(kw["model"])
+        raise litellm.RateLimitError(message=QUOTA, llm_provider="openai", model=kw["model"])
+
+    monkeypatch.setattr(litellm, "completion", refuse)
+    monkeypatch.setenv("LLM_BACKEND", "litellm")
+    llm.reset_unavailable()
+    data = load_all("data/raw/baseline_small")
+    with pytest.raises(llm.LLMUnavailable, match="spend limit"):
+        AGENTS["pipeline"].run(data, "t-quota", force_tier="small")
+    assert len(calls) == 1                                   # no retries on a permanent error
+    with pytest.raises(llm.LLMUnavailable):
+        llm.preflight()
+    assert len(calls) == 1                                   # breaker open: no further network calls
+    llm.reset_unavailable()
+
+
+def test_transient_rate_limit_is_retried(monkeypatch):
+    calls = []
+
+    def flaky(**kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise litellm.RateLimitError(message="Rate limit reached for requests per min", llm_provider="openai",
+                                         model=kw["model"])
+        return "ok"
+
+    monkeypatch.setattr(litellm, "completion", flaky)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    llm.reset_unavailable()
+    assert llm.completion(model="gpt-4o-mini", messages=[]) == "ok" and len(calls) == 2
+```
+
 ## Step 19.2 — GitHub Actions
 
 **File:** `.github/workflows/eval.yml`
@@ -382,11 +455,11 @@ python -c "import yaml; w=yaml.safe_load(open('.github/workflows/eval.yml')); pr
 Expected output (captured on a fresh extract, mock backend):
 
 ```text
-16 passed in 6.57s
+19 passed in 7.79s
 jobs: ['offline', 'real-models']
 ```
 
 ## Checkpoint
 
-- [ ] 16 unit tests pass
+- [ ] 19 unit tests pass
 - [ ] after a push, the `offline` job is green; add the three secrets for the nightly job

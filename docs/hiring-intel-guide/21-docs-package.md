@@ -83,7 +83,7 @@ ingest -> enrich (OpenJev labels free-text notes)
 
 ## Docs
 
-- [Architecture](docs/ARCHITECTURE.md) · [Output contract](docs/CONTRACTS.md)
+- [Architecture](docs/ARCHITECTURE.md) · [Output contract](docs/CONTRACTS.md) · [LangGraph flow, node by node](docs/GRAPH_FLOW.md) ([HTML](docs/graph_flow.html))
 - [Cost & latency definitions](docs/COST_AND_LATENCY.md) · [Optimization report](docs/OPTIMIZATION_REPORT.md)
 - [Evaluation](docs/EVALUATION.md) · [External evaluation: LangSmith, DeepEval](docs/EXTERNAL_EVALUATION.md) · [Human in the loop](docs/HUMAN_IN_THE_LOOP.md)
 - [OpenJev](docs/OPENJEV.md) · [A2A](docs/A2A.md)
@@ -331,6 +331,8 @@ python scripts/langsmith_eval.py --variant all_large --size medium
 python scripts/langsmith_eval.py --variant optimized --size medium
 ```
 
+**These make real LLM calls and cost real money.** The script prints an estimate first: about $0.38 for `all_large` and $0.07 for `optimized` on `medium` inputs, at the prices in `config/models.yaml`. Real token counts usually run higher. It refuses to start above `--max-usd` (default 1.0). It also makes one tiny call first, so an exhausted quota, a spend limit or a bad key stops it in about a second, before an experiment is created. If the provider refuses a call mid-run, the run stops (`LLMUnavailable`) and is not retried. Errored cases print as `ERR` and are left out of the pass rate: a run that never reached the model is not a 0/18.
+
 The first call uploads `data/golden/golden_set.jsonl` as dataset `hiring-intel-golden`. Each call records an experiment (`optimized-medium-…`). In the dataset's **Experiments** tab, select both and **Compare**: per case you see the pass/fail, grounding, eval score, cost and latency side by side. That is your before/after for the optimization report, with the evidence one click away.
 
 | Evaluator | Score |
@@ -537,7 +539,7 @@ Every decision is logged to the `decisions` table with its backend, confidence a
 | `http` | Docker Compose `openjev` service (recommended) | `docker compose --profile openjev up -d`, `OPENJEV_URL=http://openjev:8200` |
 | `local` | Weights loaded in-process | `pip install -r requirements-ml.txt` |
 | `fallback` | No weights available (offline CI, this build) | none; keyword scorer with the same interface |
-| `auto` (default) | http if `OPENJEV_URL` set, else local, else fallback | — |
+| `auto` (default) | http if `OPENJEV_URL` is set and its `/health` answers; else local weights; else fallback. If `OPENJEV_URL` is set but the service is down, it logs a warning and uses the fallback rather than loading the model in-process by surprise | — |
 
 The committed benchmark used **fallback** because the build machine could not reach Hugging Face. The real model was then measured on a laptop CPU (below).
 

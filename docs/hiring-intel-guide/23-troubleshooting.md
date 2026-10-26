@@ -21,9 +21,12 @@
 | `deepeval requires click<8.4.0` warning | `huggingface_hub` needs `click>=8.4.2`; the two can't share one environment | run DeepEval from a separate venv (chapter 17), or ignore the warning if you don't use the `deepeval` CLI |
 | real OpenJev labels notes badly or marks most `unclassified` | question-style hypotheses, or a yes/no confidence floor on a multi-class choice | use plain-statement hypotheses (`REJECTION_HYPOTHESES` in `enrich.py`) and `min_confidence_multi` (0.30); compare `accuracy_when_labelled` with `escalated_share` |
 | note labelling takes minutes | ~8 s per unique note on CPU | expected for the 0.8B model on CPU; use a GPU, or `mode="llm"` for many unique notes |
+| `OpenJev service at http://localhost:8200 is not reachable` / `Connection refused` | `OPENJEV_URL` is set (usually in `.env`) but the server isn't running | start it: `uvicorn services.openjev_server:app --port 8200` (it takes a minute to load), or remove `OPENJEV_URL` from `.env`. With `OPENJEV_BACKEND=auto` the run continues on the keyword fallback and logs a warning; with `http` it stops at start-up |
 | OpenJev decisions say `keyword-fallback` | no weights / no `OPENJEV_URL` | `pip install -r requirements-ml.txt` or run the `openjev` service |
 | `DEEPEVAL_JUDGE=openjev needs the real OpenJev model` | fallback can't judge faithfulness | start OpenJev, or use `DEEPEVAL_JUDGE=llm` |
-| LiteLLM 401 / 429 | key missing or rate limited | check `.env`; LiteLLM retries twice, then the agent shows `failed` |
+| `LLMUnavailable: ... insufficient_quota / spend limit` | the OpenAI project hit its spend limit or has no credit | raise the limit under the project's **Limits** settings, or wait for the reset; meanwhile run with `LLM_BACKEND=mock`. Nothing is retried, and errored cases show `ERR`, not 0 |
+| LiteLLM 401 | key missing or wrong | check `OPENAI_API_KEY` in `.env`; it fails at once (`LLMUnavailable`) |
+| 429 "rate limit reached for requests per min" | short-term rate limit | retried twice with backoff; then that agent shows `failed` and the run continues |
 | JSON validation error after repair | model ignored the schema | use a stronger tier for that agent, or tighten its prompt |
 | USD looks wrong | prices in `config/models.yaml` are examples | copy current prices from your provider |
 

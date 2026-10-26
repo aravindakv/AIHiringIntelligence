@@ -10,7 +10,7 @@ import yaml
 from hiring_intel.agents.router import TaskProfile, route
 from hiring_intel.contracts import AgentOutput, Evidence, Insight, LLMInsights
 from hiring_intel.ingest import HiringData
-from hiring_intel.llm import ROOT, call_structured
+from hiring_intel.llm import ROOT, LLMUnavailable, call_structured
 from hiring_intel.metrics import to_text
 from hiring_intel.rag.retriever import retrieve
 
@@ -109,6 +109,8 @@ class BaseInsightAgent:
                                retrieved_chunks=[c for c, _ in chunks],
                                compute_ms=int((time.perf_counter() - t0) * 1000) - (0 if cost.simulated else llm_ms),
                                status="ok" if chunks else "degraded")
+        except LLMUnavailable:                        # the provider refuses every call: stop the run
+            raise
         except Exception as e:                        # one agent failing never kills the run
             return AgentOutput(agent=self.name, run_id=run_id, status="failed",
                                compute_ms=int((time.perf_counter() - t0) * 1000),
